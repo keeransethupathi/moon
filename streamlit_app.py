@@ -17,10 +17,15 @@ PID_FILE = "ws_pid.txt"
 
 # Hardcoded credentials (kept as is)
 # Credentials from st.secrets (defined in .streamlit/secrets.toml locally or Cloud dashboard)
-TOTP_SECRET = st.secrets["TOTP_SECRET"]
-API_KEY = st.secrets["API_KEY"]
-CLIENT_CODE = st.secrets["CLIENT_CODE"]
-PASSWORD = st.secrets["PASSWORD"]
+TOTP_SECRET = st.secrets.get("TOTP_SECRET")
+API_KEY = st.secrets.get("API_KEY")
+CLIENT_CODE = st.secrets.get("CLIENT_CODE")
+PASSWORD = st.secrets.get("PASSWORD")
+
+# Check if secrets are missing
+if not all([TOTP_SECRET, API_KEY, CLIENT_CODE, PASSWORD]):
+    st.error("Missing Secrets! Please set your credentials (TOTP_SECRET, API_KEY, CLIENT_CODE, PASSWORD) in the Streamlit Cloud dashboard or .streamlit/secrets.toml.")
+    st.stop()
 
 # ================= HELPER FUNCTIONS =================
 def perform_angel_login():
