@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Streamlit
+.streamlit/
+
+# Project Data
+auth.json
+market_data.json
+ws_pid.txt
+stop_signal.txt
+live_data.json
+logs/
+
+# MacOS
+.DS_Store

@@ -1,0 +1,8 @@
+streamlit
+supabase
+smartapi-python
+pandas
+logzero
+pyotp
+streamlit-lightweight-charts
+requests
