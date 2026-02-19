@@ -6,6 +6,7 @@ import os
 import subprocess
 import requests
 import pyotp
+import sys
 from streamlit_lightweight_charts import renderLightweightCharts
 
 # ================= STREAMLIT CONFIG =================
@@ -70,11 +71,15 @@ if menu == "📊 Dashboard":
             if st.button("🚀 Start Backend System", type="primary"):
                 if os.path.exists(STOP_FILE):
                     os.remove(STOP_FILE)
-                # Kill existing ones just in case
-                subprocess.run(["taskkill", "/F", "/IM", "python.exe"], capture_output=True)
+                # Kill existing ones just in case (Windows only)
+                if os.name == 'nt':
+                     try:
+                         subprocess.run(["taskkill", "/F", "/IM", "python.exe"], capture_output=True)
+                     except:
+                         pass
                 time.sleep(1)
                 # Run backend with arguments
-                args = ["python", BACKEND_SCRIPT, str(exchange_type), token_id]
+                args = [sys.executable, BACKEND_SCRIPT, str(exchange_type), token_id]
                 subprocess.Popen(args, creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
                 st.success(f"Backend starting for {selected_exchange_name}:{token_id}...")
                 time.sleep(2)
