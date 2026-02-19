@@ -11,6 +11,7 @@ import threading
 import traceback
 from datetime import datetime
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
+from streamlit.runtime.scriptrunner import add_script_run_context
 from streamlit_lightweight_charts import renderLightweightCharts
 
 # ================= STREAMLIT CONFIG =================
@@ -115,12 +116,6 @@ class StreamlitMarketBackend:
                     self.ohlc_bars.pop(0)
                     if self.vwma_bars: self.vwma_bars.pop(0)
                 
-                # Update st.session_state from background thread
-                # NOTE: This might not trigger a rerun, but the main loop will catch it
-                st.session_state.ohlc_data = self.ohlc_bars.copy()
-                st.session_state.vwma_data = self.vwma_bars.copy()
-                st.session_state.current_ltp = float(self.latest_ltp)
-                
                 self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
 
     def run(self):
@@ -184,6 +179,7 @@ if menu == "📊 Dashboard":
                     st.session_state.backend_thread = backend
                     
                     thread = threading.Thread(target=backend.run, daemon=True)
+                    add_script_run_context(thread)
                     thread.start()
                     
                     st.session_state.backend_running = True
@@ -216,8 +212,16 @@ if menu == "📊 Dashboard":
     chart_placeholder = st.empty()
 
     # Data Display
-    if st.session_state.backend_running or st.session_state.ohlc_data:
+    if st.session_state.backend_running:
         try:
+            # Sync data from background thread instance safely
+            backend = st.session_state.backend_thread
+            if backend:
+                with backend.lock:
+                    st.session_state.ohlc_data = backend.ohlc_bars.copy()
+                    st.session_state.vwma_data = backend.vwma_bars.copy()
+                    st.session_state.current_ltp = float(backend.latest_ltp)
+
             ltp = st.session_state.current_ltp
             ohlc = st.session_state.ohlc_data
             vwma = st.session_state.vwma_data
