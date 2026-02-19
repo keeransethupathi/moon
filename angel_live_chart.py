@@ -14,7 +14,7 @@ TICK_THRESHOLD = 5       # TICK BAR SIZE
 VWMA_PERIOD = 20         # Period for VWMA calculation
 correlation_id = "abc123"
 mode = 3  # FULL mode
-token_list = [{"exchangeType": 2, "tokens": ["48203"]}] # BSE Sensex example
+token_list = [{"exchangeType": 5, "tokens": ["472789"]}] # BSE Sensex example
 
 # ================= LOAD AUTH =================
 try:
@@ -109,8 +109,7 @@ def on_data(wsapp, message):
                 'open': current_bar['open'],
                 'high': current_bar['high'],
                 'low': current_bar['low'],
-                'close': current_bar['close'],
-                'volume': current_bar['volume']
+                'close': current_bar['close']
             }
 
             # Update the chart in real-time
@@ -187,7 +186,6 @@ def main():
     chart.grid(vert_enabled=True, horz_enabled=True)
     chart.layout(background_color='#131722', text_color='#d1d4dc', font_size=12)
     chart.candle_style(up_color='#26a69a', down_color='#ef5350')
-    chart.volume_config(up_color='#26a69a', down_color='#ef5350')
     
     # Start WebSocket in a separate thread
     ws_thread = threading.Thread(target=run_ws, daemon=True)

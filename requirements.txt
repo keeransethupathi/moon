@@ -1,8 +1,8 @@
 streamlit
-supabase
-smartapi-python
 pandas
-logzero
-pyotp
+numpy
+SmartApi-Python
 streamlit-lightweight-charts
+pyotp
 requests
+logzero
