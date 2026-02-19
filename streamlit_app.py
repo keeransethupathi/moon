@@ -9,6 +9,7 @@ import pyotp
 import sys
 import threading
 import traceback
+import logging
 from datetime import datetime
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 try:
@@ -43,6 +44,12 @@ if 'current_ltp' not in st.session_state:
     st.session_state.current_ltp = 0.0
 if 'backend_running' not in st.session_state:
     st.session_state.backend_running = False
+if 'last_error' not in st.session_state:
+    st.session_state.last_error = None
+
+# Silence ScriptRunContext and other warnings
+logging.getLogger("streamlit.runtime.scriptrunner").setLevel(logging.ERROR)
+logging.getLogger("smartWebSocketV2").setLevel(logging.ERROR)
 
 # Global variable to hold the backend thread instance
 # Using session_state for the instance might be tricky if it reloads, 
@@ -64,6 +71,8 @@ class StreamlitMarketBackend:
         self.raw_bars = []
         self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
         self.latest_ltp = 0.0
+        self.is_connected = True
+        self.close_reason = None
         
         self.sws = None
         self.vwma_period = 20
@@ -124,6 +133,16 @@ class StreamlitMarketBackend:
                 
                 self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
 
+    def on_error(self, wsapp, error):
+        print(f"WebSocket Error: {error}")
+        self.is_connected = False
+        self.close_reason = str(error)
+
+    def on_close(self, wsapp, code, msg):
+        print(f"WebSocket Closed: {code} - {msg}")
+        self.is_connected = False
+        self.close_reason = msg
+
     def run(self):
         try:
             self.sws = SmartWebSocketV2(
@@ -134,10 +153,13 @@ class StreamlitMarketBackend:
             )
             self.sws.on_open = self.on_open
             self.sws.on_data = self.on_data
+            self.sws.on_error = self.on_error
+            self.sws.on_close = self.on_close
             
             # Run WebSocket in a blocking call within this thread
             self.sws.connect()
         except Exception as e:
+            st.session_state.last_error = f"Thread Error: {e}"
             print(f"Backend thread error: {e}")
         finally:
             st.session_state.backend_running = False
@@ -164,7 +186,6 @@ if menu == "📊 Dashboard":
         st.header("Systems Control")
         
         # Selection UI
-        st.subheader("Instrument Selection")
         exchange_mapping = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 4}
         selected_exchange_name = st.selectbox("Exchange", options=list(exchange_mapping.keys()), index=2) # Default MCX
         exchange_type = exchange_mapping[selected_exchange_name]
@@ -207,6 +228,12 @@ if menu == "📊 Dashboard":
                 
         st.write(f"**System Status:** {'🟢 ONLINE' if st.session_state.backend_running else '🔴 OFFLINE'}")
         
+        if st.session_state.last_error:
+            st.error(f"Last Error: {st.session_state.last_error}")
+            if st.button("Clear Error"):
+                st.session_state.last_error = None
+                st.rerun()
+        
         if st.button("🗑️ Reset Data"):
             st.session_state.ohlc_data = []
             st.session_state.vwma_data = []
@@ -225,6 +252,11 @@ if menu == "📊 Dashboard":
             # Sync data from background thread instance safely
             backend = st.session_state.backend_thread
             if backend:
+                if not backend.is_connected:
+                    st.session_state.backend_running = False
+                    st.session_state.last_error = f"Disconnection: {backend.close_reason}"
+                    st.rerun()
+
                 with backend.lock:
                     st.session_state.ohlc_data = backend.ohlc_bars.copy()
                     st.session_state.vwma_data = backend.vwma_bars.copy()
