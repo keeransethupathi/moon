@@ -2,6 +2,7 @@ streamlit
 pandas
 numpy
 SmartApi-Python
+websocket-client
 streamlit-lightweight-charts
 pyotp
 requests
