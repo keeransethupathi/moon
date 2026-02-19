@@ -26,7 +26,8 @@ st.markdown("""
 # ================= CONFIG =================
 DATA_FILE = "market_data.json"
 STOP_FILE = "stop_backend.txt"
-BACKEND_SCRIPT = "backend.py"
+BACKEND_SCRIPT = os.path.join(os.path.dirname(__file__), "backend.py")
+AUTH_FILE = "auth.json"
 
 # ================= HELPERS =================
 def is_backend_running():
@@ -69,21 +70,42 @@ if menu == "📊 Dashboard":
         
         if not running:
             if st.button("🚀 Start Backend System", type="primary"):
-                if os.path.exists(STOP_FILE):
-                    os.remove(STOP_FILE)
-                # Kill existing ones just in case (Windows only)
-                if os.name == 'nt':
-                     try:
-                         subprocess.run(["taskkill", "/F", "/IM", "python.exe"], capture_output=True)
-                     except:
-                         pass
-                time.sleep(1)
-                # Run backend with arguments
-                args = [sys.executable, BACKEND_SCRIPT, str(exchange_type), token_id]
-                subprocess.Popen(args, creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
-                st.success(f"Backend starting for {selected_exchange_name}:{token_id}...")
-                time.sleep(2)
-                st.rerun()
+                # Check for auth file
+                if not os.path.exists(AUTH_FILE):
+                    st.error("Authentication file `auth.json` not found. Please login via 'Login Portal' first.")
+                else:
+                    if os.path.exists(STOP_FILE):
+                        os.remove(STOP_FILE)
+                    
+                    # Kill existing ones just in case (Windows only)
+                    if os.name == 'nt':
+                         try:
+                             subprocess.run(["taskkill", "/F", "/IM", "python.exe"], capture_output=True)
+                         except:
+                             pass
+                    
+                    time.sleep(1)
+                    
+                    # Run backend with arguments
+                    args = [sys.executable, BACKEND_SCRIPT, str(exchange_type), token_id]
+                    
+                    try:
+                        popen_kwargs = {
+                            "stdout": subprocess.DEVNULL,
+                            "stderr": subprocess.PIPE,
+                            "text": True
+                        }
+                        if os.name == 'nt':
+                            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+                        else:
+                            popen_kwargs["start_new_session"] = True
+                        
+                        proc = subprocess.Popen(args, **popen_kwargs)
+                        st.success(f"Backend process started (PID: {proc.pid}). Waiting for data...")
+                        time.sleep(3)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to launch backend: {e}")
         else:
             if st.button("🛑 Stop Backend System"):
                 with open(STOP_FILE, "w") as f:
