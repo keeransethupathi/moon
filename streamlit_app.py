@@ -12,13 +12,6 @@ import traceback
 import logging
 from datetime import datetime
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
-try:
-    from streamlit.runtime.scriptrunner import add_script_run_context
-except ImportError:
-    try:
-        from streamlit.runtime.scriptrunner.script_run_context import add_script_run_context
-    except ImportError:
-        def add_script_run_context(thread): return thread
 from streamlit_lightweight_charts import renderLightweightCharts
 
 # ================= STREAMLIT CONFIG =================
@@ -72,6 +65,7 @@ class StreamlitMarketBackend:
         self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
         self.latest_ltp = 0.0
         self.is_connected = True
+        self.is_running = True
         self.close_reason = None
         
         self.sws = None
@@ -159,10 +153,10 @@ class StreamlitMarketBackend:
             # Run WebSocket in a blocking call within this thread
             self.sws.connect()
         except Exception as e:
-            st.session_state.last_error = f"Thread Error: {e}"
+            self.close_reason = f"Thread Error: {e}"
             print(f"Backend thread error: {e}")
         finally:
-            st.session_state.backend_running = False
+            self.is_running = False
 
     def stop(self):
         if self.sws:
@@ -206,9 +200,6 @@ if menu == "📊 Dashboard":
                     st.session_state.backend_thread = backend
                     
                     thread = threading.Thread(target=backend.run, daemon=True)
-                    # add_script_run_context is only needed if the thread calls st functions.
-                    # We removed those calls, but adding it for safety if paths exist.
-                    add_script_run_context(thread)
                     thread.start()
                     
                     st.session_state.backend_running = True
@@ -252,7 +243,7 @@ if menu == "📊 Dashboard":
             # Sync data from background thread instance safely
             backend = st.session_state.backend_thread
             if backend:
-                if not backend.is_connected:
+                if not backend.is_running or not backend.is_connected:
                     st.session_state.backend_running = False
                     st.session_state.last_error = f"Disconnection: {backend.close_reason}"
                     st.rerun()
