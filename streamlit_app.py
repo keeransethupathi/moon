@@ -11,7 +11,13 @@ import threading
 import traceback
 from datetime import datetime
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
-from streamlit.runtime.scriptrunner import add_script_run_context
+try:
+    from streamlit.runtime.scriptrunner import add_script_run_context
+except ImportError:
+    try:
+        from streamlit.runtime.scriptrunner.script_run_context import add_script_run_context
+    except ImportError:
+        def add_script_run_context(thread): return thread
 from streamlit_lightweight_charts import renderLightweightCharts
 
 # ================= STREAMLIT CONFIG =================
@@ -179,6 +185,8 @@ if menu == "📊 Dashboard":
                     st.session_state.backend_thread = backend
                     
                     thread = threading.Thread(target=backend.run, daemon=True)
+                    # add_script_run_context is only needed if the thread calls st functions.
+                    # We removed those calls, but adding it for safety if paths exist.
                     add_script_run_context(thread)
                     thread.start()
                     
