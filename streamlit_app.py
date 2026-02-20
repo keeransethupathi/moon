@@ -302,7 +302,7 @@ elif menu == "🔐 Login Portal": # Login Portal
         with st.form("login_form"):
             c_code = st.text_input("Client Code", value=existing_auth.get("client_code", "K135836"))
             pwd = st.text_input("Password", type="password", value="1997")
-            api_k = st.text_input("API Key", value=existing_auth.get("api_key", "LZnKUxh1"))
+            api_k = st.text_input("API Key", value=existing_auth.get("api_key", "t0bsCNdW"))
             totp_s = st.text_input("TOTP Secret", value="YGDC6I7VDV7KJSIELCN626FKBY")
             
             submit = st.form_submit_button("LOGIN", type="primary", use_container_width=True)
