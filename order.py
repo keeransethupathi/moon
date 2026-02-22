@@ -1,5 +1,6 @@
 import requests
 import json
+import os
 
 def place_flattrade_order(tsym, qty, exch, trantype):
     """
@@ -19,10 +20,18 @@ def place_flattrade_order(tsym, qty, exch, trantype):
             if not jkey:
                 return {"stat": "Not Ok", "emsg": "Token not found in flattrade_auth.json"}
         
-        # We need the uid/actid from credentials.json
-        with open('credentials.json', 'r') as f:
-            creds = json.load(f)
-            uid = creds.get('username')
+        # Try environment variable first
+        uid = os.environ.get('FT_USERNAME')
+        
+        if not uid:
+            # Fallback to credentials.json
+            if os.path.exists('credentials.json'):
+                with open('credentials.json', 'r') as f:
+                    creds = json.load(f)
+                    uid = creds.get('username')
+            
+        if not uid:
+            return {"stat": "Not Ok", "emsg": "User ID (FT_USERNAME) not found in environment or credentials.json"}
     except Exception as e:
         return {"stat": "Not Ok", "emsg": f"Auth error: {str(e)}"}
 

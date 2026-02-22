@@ -1,6 +1,7 @@
 import time
 import json
 import pyotp
+import os
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -14,8 +15,28 @@ import hashlib
 def auto_login(creds=None, headless=False):
     # Load credentials if not provided
     if creds is None:
-        with open('credentials.json', 'r') as f:
-            creds = json.load(f)
+        # Try environment variables first
+        creds = {
+            'username': os.environ.get('FT_USERNAME'),
+            'password': os.environ.get('FT_PASSWORD'),
+            'totp_key': os.environ.get('FT_TOTP_KEY'),
+            'api_key': os.environ.get('FT_API_KEY'),
+            'api_secret': os.environ.get('FT_API_SECRET')
+        }
+        
+        # Check if all required keys are found in environment
+        if not all(creds.values()):
+            print("Some credentials missing in environment, checking credentials.json...")
+            if os.path.exists('credentials.json'):
+                with open('credentials.json', 'r') as f:
+                    file_creds = json.load(f)
+                    # Use file values for only missing ones
+                    for key in creds:
+                        if not creds[key]:
+                            creds[key] = file_creds.get(key)
+            else:
+                print("Error: credentials.json not found and environment variables missing.")
+                return {"status": "error", "message": "Missing credentials"}
 
     # Generate TOTP
     totp = pyotp.TOTP(creds['totp_key'])
@@ -121,8 +142,21 @@ def auto_login(creds=None, headless=False):
         driver.quit()
 
 def generate_access_token(request_code):
-    with open('credentials.json', 'r') as f:
-        creds = json.load(f)
+    # Try environment variables first
+    creds = {
+        'api_key': os.environ.get('FT_API_KEY'),
+        'api_secret': os.environ.get('FT_API_SECRET')
+    }
+    
+    if not all(creds.values()):
+        if os.path.exists('credentials.json'):
+            with open('credentials.json', 'r') as f:
+                file_creds = json.load(f)
+                creds['api_key'] = creds['api_key'] or file_creds.get('api_key')
+                creds['api_secret'] = creds['api_secret'] or file_creds.get('api_secret')
+        else:
+            print("Error: credentials.json not found for token generation.")
+            return None
 
     token_url = "https://authapi.flattrade.in/trade/apitoken"
     hash_value = hashlib.sha256((creds['api_key'] + request_code + creds['api_secret']).encode()).hexdigest()

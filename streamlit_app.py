@@ -16,6 +16,15 @@ from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 from streamlit_lightweight_charts import renderLightweightCharts
 from order import place_flattrade_order
 
+def safe_get_secret(key, default=None):
+    """Safely get a secret from streamlit secrets or environment variables."""
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.environ.get(key, default)
+
 # ================= STREAMLIT CONFIG =================
 st.set_page_config(layout="wide", page_title="AngelOne Intelligence Hub")
 
@@ -203,17 +212,24 @@ if menu == "📊 Dashboard":
                     with open("auth.json", "r") as f:
                         auth_data = json.load(f)
                     
-                    # Initialize and start backend thread
-                    backend = StreamlitMarketBackend(exchange_type, token_id, auth_data)
-                    st.session_state.backend_thread = backend
+                    # Ensure API Key is present (might be in secrets)
+                    if "api_key" not in auth_data:
+                        auth_data["api_key"] = safe_get_secret("ANGEL_API_KEY")
                     
-                    thread = threading.Thread(target=backend.run, daemon=True)
-                    thread.start()
-                    
-                    st.session_state.backend_running = True
-                    st.success(f"System Online for {selected_exchange_name}:{token_id}")
-                    time.sleep(1)
-                    st.rerun()
+                    if not auth_data.get("api_key"):
+                        st.error("AngelOne API Key not found in auth.json or secrets.")
+                    else:
+                        # Initialize and start backend thread
+                        backend = StreamlitMarketBackend(exchange_type, token_id, auth_data)
+                        st.session_state.backend_thread = backend
+                        
+                        thread = threading.Thread(target=backend.run, daemon=True)
+                        thread.start()
+                        
+                        st.session_state.backend_running = True
+                        st.success(f"System Online for {selected_exchange_name}:{token_id}")
+                        time.sleep(1)
+                        st.rerun()
         else:
             if st.button("🛑 Stop Backend System"):
                 if st.session_state.backend_thread:
@@ -344,10 +360,14 @@ elif menu == "🔐 Login Portal": # Login Portal
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         with st.form("login_form"):
-            c_code = st.text_input("Client Code", value=existing_auth.get("client_code", "K135836"))
+            default_c_code = existing_auth.get("client_code") or safe_get_secret("ANGEL_CLIENT_CODE", "K135836")
+            default_api_k = existing_auth.get("api_key") or safe_get_secret("ANGEL_API_KEY", "t0bsCNdW")
+            default_totp_s = safe_get_secret("ANGEL_TOTP_SECRET", "YGDC6I7VDV7KJSIELCN626FKBY")
+
+            c_code = st.text_input("Client Code", value=default_c_code)
             pwd = st.text_input("Password", type="password", value="1997")
-            api_k = st.text_input("API Key", value=existing_auth.get("api_key", "t0bsCNdW"))
-            totp_s = st.text_input("TOTP Secret", value="YGDC6I7VDV7KJSIELCN626FKBY")
+            api_k = st.text_input("API Key", value=default_api_k)
+            totp_s = st.text_input("TOTP Secret", value=default_totp_s)
             
             submit = st.form_submit_button("LOGIN", type="primary", use_container_width=True)
             
@@ -390,8 +410,8 @@ elif menu == "🔐 Login Portal": # Login Portal
 elif menu == "📈 Flattrade Login": # Flattrade Login
     st.header("📈 Flattrade Login")
     
-    API_KEY = "b5768d873c474155a3d09d56a50f5314"
-    API_SECRET = "2025.3bb14ae6afd04844b10e338a6f388a9c7416205cb6990c69"
+    API_KEY = safe_get_secret("FT_API_KEY", "b5768d873c474155a3d09d56a50f5314")
+    API_SECRET = safe_get_secret("FT_API_SECRET", "2025.3bb14ae6afd04844b10e338a6f388a9c7416205cb6990c69")
     AUTH_URL = f"https://auth.flattrade.in/?app_key={API_KEY}"
     TOKEN_URL = "https://authapi.flattrade.in/trade/apitoken"
 
@@ -405,9 +425,11 @@ elif menu == "📈 Flattrade Login": # Flattrade Login
             
             with st.status("Running automated login...") as status:
                 st.write("Initializing automation...")
-                # We need to make sure credentials.json exists or pass them here
-                if not os.path.exists('credentials.json'):
-                    st.error("`credentials.json` not found. Manual setup required.")
+                # Try loading from secrets/env first via auto_login's internal logic
+                # or check if credentials.json exists as fallback
+                has_secrets = safe_get_secret('FT_USERNAME') is not None
+                if not os.path.exists('credentials.json') and not has_secrets:
+                    st.error("No credentials found. Please set FT environment variables / secrets or provide `credentials.json`.")
                 else:
                     st.write("Navigating to login page and filling details...")
                     result = auto_login(headless=True)
