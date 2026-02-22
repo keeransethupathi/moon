@@ -50,11 +50,35 @@ def auto_login(creds=None, headless=False):
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-
+    driver = None
     try:
         # Navigate to login page
         auth_url = f"https://auth.flattrade.in/?app_key={creds['api_key']}"
+        
+        # Setup Selenium with better error handling for cloud environments
+        chrome_options = Options()
+        if headless:
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+
+        try:
+            # First try standard ChromeDriverManager
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+        except Exception as e:
+            print(f"Standard ChromeDriver failed, trying system chromium: {e}")
+            # Fallback for Streamlit Cloud (Linux)
+            try:
+                chrome_options.binary_location = "/usr/bin/chromium"
+                service = Service("/usr/bin/chromedriver")
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+            except Exception as e2:
+                print(f"System chromium failed: {e2}")
+                # Last ditch effort: try without service path
+                chrome_options.binary_location = "/usr/bin/chromium-browser"
+                driver = webdriver.Chrome(options=chrome_options)
+
         driver.get(auth_url)
         print("Navigated to login page")
 
@@ -102,9 +126,16 @@ def auto_login(creds=None, headless=False):
             print(f"Failed to click login button: {e}")
             # Final attempt: try clicking any button that looks like the primary one
             try:
-                primary_btn = driver.find_element(By.CSS_SELECTOR, "button.shine-button")
-                driver.execute_script("arguments[0].click();", primary_btn)
-                print("Clicked primary button via CSS selector as last resort")
+                # Use a loop to retry clicking in case of stale elements
+                for _ in range(3):
+                    try:
+                        primary_btn = driver.find_element(By.CSS_SELECTOR, "button.shine-button")
+                        driver.execute_script("arguments[0].click();", primary_btn)
+                        print("Clicked primary button via CSS selector")
+                        break
+                    except Exception as inner_e:
+                        print(f"Retry click failed: {inner_e}")
+                        time.sleep(1)
             except:
                 return {"status": "error", "message": f"Login button click failed: {str(e)}"}
 
