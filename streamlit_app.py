@@ -316,7 +316,10 @@ if menu == "📊 Dashboard":
                 
                 if ltp and vwma:
                     tsym = st.session_state.get('trade_tsym')
-                    qty = st.session_state.get('trade_qty')
+                    # Calculate total quantity: n lots * m lot size
+                    num_lots = st.session_state.get('trade_num_lots', 1)
+                    lot_size = st.session_state.get('trade_lot_size', 1)
+                    qty = num_lots * lot_size
                     exch = st.session_state.get('trade_exch')
                     
                     if tsym and qty and exch:
@@ -517,8 +520,15 @@ else: # Order Portal
         trade_tsym = st.text_input("Trading Symbol (tsym)", value="NIFTY24FEB26C26000", key="trade_tsym_input")
         st.session_state.trade_tsym = trade_tsym
         
-        trade_qty = st.number_input("Quantity (qty)", value=65, step=1, key="trade_qty_input")
-        st.session_state.trade_qty = trade_qty
+        trade_num_lots = st.number_input("Number of Lots (n)", value=1, min_value=1, step=1, key="trade_num_lots_input")
+        st.session_state.trade_num_lots = trade_num_lots
+        
+        trade_lot_size = st.number_input("Lot Size (m)", value=65, min_value=1, step=1, key="trade_lot_size_input")
+        st.session_state.trade_lot_size = trade_lot_size
+        
+        total_qty = trade_num_lots * trade_lot_size
+        st.write(f"**Total Quantity:** {total_qty}")
+        st.session_state.trade_qty = total_qty
         
         trade_exch = st.selectbox("Exchange (exch)", options=["NSE", "NFO", "MCX", "BSE", "CDS"], index=1, key="trade_exch_input")
         st.session_state.trade_exch = trade_exch
