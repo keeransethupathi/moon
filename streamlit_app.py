@@ -14,6 +14,7 @@ import re
 from datetime import datetime
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 from streamlit_lightweight_charts import renderLightweightCharts
+from order import place_flattrade_order
 
 # ================= STREAMLIT CONFIG =================
 st.set_page_config(layout="wide", page_title="AngelOne Intelligence Hub")
@@ -40,6 +41,12 @@ if 'backend_running' not in st.session_state:
     st.session_state.backend_running = False
 if 'last_error' not in st.session_state:
     st.session_state.last_error = None
+if 'auto_trading_active' not in st.session_state:
+    st.session_state.auto_trading_active = False
+if 'trading_logs' not in st.session_state:
+    st.session_state.trading_logs = []
+if 'last_order_side' not in st.session_state:
+    st.session_state.last_order_side = None
 
 # Silence ScriptRunContext and other warnings
 logging.getLogger("streamlit.runtime.scriptrunner").setLevel(logging.ERROR)
@@ -173,7 +180,7 @@ st.title("🛡️ AngelOne Intelligence Hub")
 # Sidebar Menu for Navigation
 with st.sidebar:
     st.header(" NAVIGATION")
-    menu = st.radio("Go to", ["📊 Dashboard", "🔐 Login Portal", "📈 Flattrade Login"])
+    menu = st.radio("Go to", ["📊 Dashboard", "🔐 Login Portal", "📈 Flattrade Login", "📦 Order Portal"])
     st.divider()
 
 if menu == "📊 Dashboard":
@@ -285,6 +292,42 @@ if menu == "📊 Dashboard":
         except Exception as e:
             st.error(f"UI Error: {e}")
             
+        # ================= AUTOMATED TRADING LOGIC =================
+        if st.session_state.auto_trading_active:
+            try:
+                ltp = st.session_state.current_ltp
+                vwma = st.session_state.vwma_data[-1]['value'] if st.session_state.vwma_data else None
+                
+                if ltp and vwma:
+                    tsym = st.session_state.get('trade_tsym')
+                    qty = st.session_state.get('trade_qty')
+                    exch = st.session_state.get('trade_exch')
+                    
+                    if tsym and qty and exch:
+                        side = None
+                        if ltp > vwma and st.session_state.last_order_side != 'BUY':
+                            side = 'B'
+                            side_label = 'BUY'
+                        elif ltp < vwma and st.session_state.last_order_side != 'SELL':
+                            side = 'S'
+                            side_label = 'SELL'
+                        
+                        if side:
+                            log_msg = f"[{datetime.now().strftime('%H:%M:%S')}] Attempting {side_label} for {tsym} @ {ltp} (VWMA: {vwma:.2f})"
+                            st.session_state.trading_logs.append(log_msg)
+                            
+                            response = place_flattrade_order(tsym, qty, exch, side)
+                            
+                            if response.get('stat') == 'Ok':
+                                st.session_state.last_order_side = side_label
+                                success_msg = f"✅ {side_label} Order Placed! ID: {response.get('norenordno')}"
+                                st.session_state.trading_logs.append(success_msg)
+                            else:
+                                error_msg = f"❌ Order Failed: {response.get('emsg')}"
+                                st.session_state.trading_logs.append(error_msg)
+            except Exception as e:
+                st.session_state.trading_logs.append(f"⚠️ Trading logic error: {e}")
+
         time.sleep(1)
         st.rerun()
     else:
@@ -344,7 +387,7 @@ elif menu == "🔐 Login Portal": # Login Portal
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-else: # Flattrade Login
+elif menu == "📈 Flattrade Login": # Flattrade Login
     st.header("📈 Flattrade Login")
     
     API_KEY = "b5768d873c474155a3d09d56a50f5314"
@@ -441,3 +484,51 @@ else: # Flattrade Login
                         st.error(f"Failed to generate access token. HTTP Status: {response.status_code}")
                 except Exception as e:
                     st.error(f"An error occurred: {e}")
+
+else: # Order Portal
+    st.header("📦 Flattrade Order Portal")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Configuration")
+        trade_tsym = st.text_input("Trading Symbol (tsym)", value="NIFTY24FEB26C26000", key="trade_tsym_input")
+        st.session_state.trade_tsym = trade_tsym
+        
+        trade_qty = st.number_input("Quantity (qty)", value=65, step=1, key="trade_qty_input")
+        st.session_state.trade_qty = trade_qty
+        
+        trade_exch = st.selectbox("Exchange (exch)", options=["NSE", "NFO", "MCX", "BSE", "CDS"], index=1, key="trade_exch_input")
+        st.session_state.trade_exch = trade_exch
+        
+        st.divider()
+        
+        if not st.session_state.auto_trading_active:
+            if st.button("🚀 START AUTO TRADING", type="primary", use_container_width=True):
+                if not st.session_state.backend_running:
+                    st.error("Backend System is Offline! Start it in the Dashboard first.")
+                else:
+                    st.session_state.auto_trading_active = True
+                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] Auto Trading Started.")
+                    st.rerun()
+        else:
+            if st.button("🛑 STOP AUTO TRADING", type="primary", use_container_width=True):
+                st.session_state.auto_trading_active = False
+                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] Auto Trading Stopped.")
+                st.rerun()
+        
+        st.write(f"**Trading Status:** {'🟢 ACTIVE' if st.session_state.auto_trading_active else '🔴 INACTIVE'}")
+        if st.session_state.last_order_side:
+            st.write(f"**Last Action:** {st.session_state.last_order_side}")
+
+    with col2:
+        st.subheader("Activity Logs")
+        log_container = st.container(height=400)
+        with log_container:
+            for log in reversed(st.session_state.trading_logs):
+                st.write(log)
+        
+        if st.button("🗑️ Clear Logs"):
+            st.session_state.trading_logs = []
+            st.session_state.last_order_side = None
+            st.rerun()
