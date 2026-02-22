@@ -12,3 +12,4 @@ logs/
 credentials.json
 page_source.html
 *.png
+.streamlit/
