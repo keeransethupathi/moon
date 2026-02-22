@@ -10,6 +10,7 @@ import sys
 import threading
 import traceback
 import logging
+import re
 from datetime import datetime
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 from streamlit_lightweight_charts import renderLightweightCharts
@@ -351,7 +352,52 @@ else: # Flattrade Login
     AUTH_URL = f"https://auth.flattrade.in/?app_key={API_KEY}"
     TOKEN_URL = "https://authapi.flattrade.in/trade/apitoken"
 
-    st.info("Follow these steps to authenticate with Flattrade:")
+    # Automated Login Section
+    st.subheader("🤖 Automated Login")
+    st.info("Click the button below to automatically login and generate your access token.")
+    
+    if st.button("🚀 Run Auto Login", type="primary", use_container_width=True):
+        try:
+            from auto_login import auto_login, generate_access_token
+            
+            with st.status("Running automated login...") as status:
+                st.write("Initializing automation...")
+                # We need to make sure credentials.json exists or pass them here
+                if not os.path.exists('credentials.json'):
+                    st.error("`credentials.json` not found. Manual setup required.")
+                else:
+                    st.write("Navigating to login page and filling details...")
+                    result = auto_login(headless=True)
+                    
+                    if result["status"] == "success":
+                        request_code = result["code"]
+                        st.write(f"Captured request code: {request_code[:10]}...")
+                        
+                        st.write("Generating final access token...")
+                        token = generate_access_token(request_code)
+                        
+                        if token:
+                            st.success("Access token generated successfully!")
+                            st.code(token, language="text")
+                            
+                            flat_auth = {"api_key": API_KEY, "token": token}
+                            with open("flattrade_auth.json", "w") as f:
+                                json.dump(flat_auth, f, indent=4)
+                            st.info("Token saved to `flattrade_auth.json`")
+                            status.update(label="Login Successful!", state="complete")
+                        else:
+                            st.error("Failed to generate access token from code.")
+                            status.update(label="Token Generation Failed", state="error")
+                    else:
+                        st.error(f"Automation failed: {result.get('message')}")
+                        status.update(label="Automation Failed", state="error")
+        except Exception as e:
+            st.error(f"An unexpected error occurred: {e}")
+            st.exception(e)
+
+    st.divider()
+    st.subheader("📂 Manual Login (Fallback)")
+    st.info("Follow these steps if automated login fails:")
     st.markdown(f"1. Open the [Flattrade Auth URL]({AUTH_URL}) in your browser.")
     st.markdown("2. Log in and authorize the application.")
     st.markdown("3. Copy the `request_code` from the redirect URL (it looks like `?code=...`).")
@@ -359,14 +405,18 @@ else: # Flattrade Login
     st.link_button("Open Flattrade Auth", AUTH_URL, use_container_width=True)
     
     with st.form("flattrade_login_form"):
-        request_code = st.text_input("Enter request_code")
-        submit_flat = st.form_submit_button("GENERATE TOKEN", type="primary", use_container_width=True)
+        input_data = st.text_input("Enter request_code or full redirect URL")
+        submit_flat = st.form_submit_button("GENERATE TOKEN (MANUAL)", use_container_width=True)
         
         if submit_flat:
-            if not request_code:
-                st.warning("Please enter the request_code.")
+            if not input_data:
+                st.warning("Please enter the request_code or URL.")
             else:
                 try:
+                    # Use regex to extract code if input is a URL
+                    code_match = re.search(r"[?&]code=([^&#]+)", input_data)
+                    request_code = code_match.group(1) if code_match else input_data
+                    
                     import hashlib
                     hash_value = hashlib.sha256((API_KEY + request_code + API_SECRET).encode()).hexdigest()
                     payload = {"api_key": API_KEY, "request_code": request_code, "api_secret": hash_value}

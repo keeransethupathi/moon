@@ -7,3 +7,5 @@ streamlit-lightweight-charts
 pyotp
 requests
 logzero
+selenium
+webdriver-manager

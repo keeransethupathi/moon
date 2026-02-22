@@ -9,3 +9,6 @@ logs/
 .env
 .DS_Store
 *.tmp
+credentials.json
+page_source.html
+*.png
