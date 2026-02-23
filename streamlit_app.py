@@ -16,6 +16,9 @@ from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 from streamlit_lightweight_charts import renderLightweightCharts
 from order import place_flattrade_order
 
+# ================= STREAMLIT CONFIG =================
+st.set_page_config(layout="wide", page_title="AngelOne Intelligence Hub")
+
 def safe_get_secret(key, default=None):
     """Safely get a secret from streamlit secrets or environment variables."""
     try:
@@ -25,8 +28,108 @@ def safe_get_secret(key, default=None):
         pass
     return os.environ.get(key, default)
 
-# ================= STREAMLIT CONFIG =================
-st.set_page_config(layout="wide", page_title="AngelOne Intelligence Hub")
+@st.fragment(run_every="1s")
+def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
+    # Data Sync
+    DATA_FILE = "market_data.json"
+    data = {}
+    data_found = False
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r") as f:
+                data = json.load(f)
+            
+            last_update = data.get("last_update", 0)
+            if time.time() - last_update < 10:
+                st.session_state.backend_running = True
+                st.session_state.ohlc_data = data.get("ohlc", [])
+                st.session_state.vwma_data = data.get("vwma", [])
+                st.session_state.current_ltp = float(data.get("ltp", 0.0))
+                st.session_state.last_data_ts = last_update
+                data_found = True
+            else:
+                st.session_state.backend_running = False
+    except Exception as fe:
+        print(f"Local Sync Error: {fe}")
+
+    # Layout
+    col1, col2 = st.columns(2)
+    ltp = st.session_state.current_ltp
+    ohlc = st.session_state.ohlc_data
+    vwma = st.session_state.vwma_data
+    
+    latest_vwma = vwma[-1]['value'] if vwma else 0.0
+    col1.metric("Current Price", f"₹{ltp:,.2f}")
+    col2.metric("VWMA (20)", f"₹{latest_vwma:,.2f}")
+    
+    if ohlc:
+        chart_options = {
+            "height": 500,
+            "layout": {
+                "background": {"type": 'solid', "color": '#0e1117'},
+                "textColor": '#d1d4dc',
+                "fontSize": 10
+            },
+            "grid": {"vertLines": {"color": "#242733"}, "horzLines": {"color": "#242733"}},
+            "timeScale": {"timeVisible": True, "secondsVisible": True, "borderColor": '#485c7b'},
+        }
+        series = [{"type": 'Candlestick', "data": ohlc, "options": {"upColor": '#26a69a', "downColor": '#ef5350'}}]
+        if vwma:
+            series.append({"type": 'Line', "data": vwma, "options": {"color": '#2196f3', "lineWidth": 2, "title": 'VWMA'}})
+        
+        # Rendering directly in the fragment (without .empty()) reduces flicker
+        renderLightweightCharts([{"chart": chart_options, "series": series}], 'integrated_chart')
+    else:
+        st.info("Connected. Waiting for the first bar (5 ticks)...")
+            
+    # ================= AUTOMATED TRADING LOGIC =================
+    if st.session_state.auto_trading_active:
+        try:
+            # Re-read metrics for logic
+            vwma_val = vwma[-1]['value'] if vwma else None
+            if ltp and vwma_val:
+                tsym = st.session_state.get('trade_tsym')
+                num_lots = st.session_state.get('trade_num_lots', 1)
+                lot_size = st.session_state.get('trade_lot_size', 1)
+                qty = num_lots * lot_size
+                exch = st.session_state.get('trade_exch')
+                
+                if tsym and qty and exch:
+                    side = None
+                    if ltp > vwma_val and st.session_state.last_order_side != 'BUY':
+                        side = 'B'
+                        side_label = 'BUY'
+                    elif ltp < vwma_val and st.session_state.last_order_side != 'SELL':
+                        side = 'S'
+                        side_label = 'SELL'
+                    
+                    if side:
+                        log_msg = f"[{datetime.now().strftime('%H:%M:%S')}] Attempting {side_label} for {tsym} @ {ltp} (VWMA: {vwma_val:.2f})"
+                        st.session_state.trading_logs.append(log_msg)
+                        response = place_flattrade_order(tsym, qty, exch, side)
+                        
+                        if response.get('stat') == 'Ok':
+                            st.session_state.last_order_side = side_label
+                            st.session_state.trading_logs.append(f"✅ {side_label} Order Placed! ID: {response.get('norenordno')}")
+                        else:
+                            st.session_state.trading_logs.append(f"❌ Order Failed: {response.get('emsg')}")
+        except Exception as e:
+            st.session_state.trading_logs.append(f"⚠️ Trading logic error: {e}")
+
+    if not data_found:
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, "r") as f:
+                    offline_data = json.load(f)
+                if time.time() - offline_data.get("last_update", 0) < 10:
+                    st.info("Live data detected locally. Connecting...")
+                    st.session_state.backend_running = True
+                    st.rerun()
+            except:
+                pass
+        st.info("System Offline. Start backend in sidebar or ensure it's running.")
+
+# ================= UI Styling =================
 
 # UI Styling
 st.markdown("""
@@ -60,128 +163,6 @@ if 'last_order_side' not in st.session_state:
 # Silence ScriptRunContext and other warnings
 logging.getLogger("streamlit.runtime.scriptrunner").setLevel(logging.ERROR)
 logging.getLogger("smartWebSocketV2").setLevel(logging.ERROR)
-
-# Global variable to hold the backend thread instance
-# Using session_state for the instance might be tricky if it reloads, 
-# but for simple threading it often works.
-if 'backend_thread' not in st.session_state:
-    st.session_state.backend_thread = None
-
-# ================= BACKEND LOGIC =================
-class StreamlitMarketBackend:
-    def __init__(self, exchange_type, token_id, auth_data):
-        self.exchange_type = exchange_type
-        self.token_id = token_id
-        self.auth_data = auth_data
-        self.stop_event = threading.Event()
-        self.lock = threading.Lock()
-        
-        self.ohlc_bars = []
-        self.vwma_bars = []
-        self.raw_bars = []
-        self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
-        self.latest_ltp = 0.0
-        self.is_connected = True
-        self.is_running = True
-        self.close_reason = None
-        
-        self.sws = None
-        self.vwma_period = 20
-        self.tick_bar_size = 5
-
-    def on_open(self, wsapp):
-        try:
-            time.sleep(2)
-            token_list = [{"exchangeType": self.exchange_type, "tokens": [self.token_id]}]
-            correlation_id = f"st_{self.token_id}"
-            self.sws.subscribe(correlation_id, 3, token_list)
-        except Exception as e:
-            print(f"Subscription Error: {e}")
-
-    def on_data(self, wsapp, message):
-        if message and isinstance(message, dict) and "last_traded_price" in message:
-            try:
-                ltp = message["last_traded_price"] / 100
-                qty = message.get("last_traded_quantity") or 1
-                ts = datetime.fromtimestamp(message["exchange_timestamp"] / 1000)
-                self.add_tick(ltp, qty, ts)
-            except Exception as e:
-                print(f"Tick processing error: {e}")
-
-    def add_tick(self, ltp, qty, ts):
-        with self.lock:
-            self.latest_ltp = ltp
-            if self.current_bar["open"] is None:
-                self.current_bar["open"] = ltp
-            self.current_bar["high"] = max(self.current_bar["high"], ltp)
-            self.current_bar["low"] = min(self.current_bar["low"], ltp)
-            self.current_bar["close"] = ltp
-            self.current_bar["ticks"] += 1
-            self.current_bar["volume"] += qty
-
-            if self.current_bar["ticks"] >= self.tick_bar_size:
-                # Add 5 hours 30 minutes for IST correction
-                chart_time = int(ts.timestamp()) + 19800
-                bar = {
-                    "time": chart_time,
-                    "open": self.current_bar["open"],
-                    "high": self.current_bar["high"],
-                    "low": self.current_bar["low"],
-                    "close": self.current_bar["close"],
-                    "volume": self.current_bar["volume"]
-                }
-                self.ohlc_bars.append(bar)
-                self.raw_bars.append(bar)
-                
-                if len(self.raw_bars) >= self.vwma_period:
-                    df = pd.DataFrame(self.raw_bars[-self.vwma_period:])
-                    vwma_val = (df['close'] * df['volume']).sum() / df['volume'].sum()
-                    self.vwma_bars.append({"time": chart_time, "value": float(vwma_val)})
-                
-                if len(self.ohlc_bars) > 500:
-                    self.ohlc_bars.pop(0)
-                    if self.vwma_bars: self.vwma_bars.pop(0)
-                
-                self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
-
-    def on_error(self, wsapp, error):
-        print(f"WebSocket Error: {error}")
-        self.is_connected = False
-        self.close_reason = str(error)
-
-    def on_close(self, wsapp, code, msg):
-        print(f"WebSocket Closed: {code} - {msg}")
-        self.is_connected = False
-        self.close_reason = msg
-
-    def run(self):
-        try:
-            self.sws = SmartWebSocketV2(
-                self.auth_data["Authorization"], 
-                self.auth_data["api_key"], 
-                self.auth_data["client_code"], 
-                self.auth_data["feedtoken"]
-            )
-            self.sws.on_open = self.on_open
-            self.sws.on_data = self.on_data
-            self.sws.on_error = self.on_error
-            self.sws.on_close = self.on_close
-            
-            # Run WebSocket in a blocking call within this thread
-            self.sws.connect()
-        except Exception as e:
-            self.close_reason = f"Thread Error: {e}"
-            print(f"Backend thread error: {e}")
-        finally:
-            self.is_running = False
-
-    def stop(self):
-        if self.sws:
-            try:
-                self.sws.close()
-            except:
-                pass
-        self.stop_event.set()
 
 # ================= UI =================
 st.title("🛡️ AngelOne Intelligence Hub")
@@ -219,25 +200,41 @@ if menu == "📊 Dashboard":
                     if not auth_data.get("api_key"):
                         st.error("AngelOne API Key not found in auth.json or secrets.")
                     else:
-                        # Initialize and start backend thread
-                        backend = StreamlitMarketBackend(exchange_type, token_id, auth_data)
-                        st.session_state.backend_thread = backend
+                        # START BACKEND via Subprocess (External Process)
+                        # First check if it's already actually online locally
+                        is_already_online = False
+                        DATA_FILE = "market_data.json"
+                        if os.path.exists(DATA_FILE):
+                            try:
+                                with open(DATA_FILE, "r") as f:
+                                    data = json.load(f)
+                                if time.time() - data.get("last_update", 0) < 10:
+                                    is_already_online = True
+                            except:
+                                pass
                         
-                        thread = threading.Thread(target=backend.run, daemon=True)
-                        thread.start()
+                        if is_already_online:
+                            st.warning(f"Backend for {token_id} is already running locally.")
+                        else:
+                            import subprocess
+                            python_exe = sys.executable
+                            cmd = [python_exe, "backend.py", str(exchange_type), str(token_id)]
+                            
+                            # Launch backend.py as a separate process in a new console
+                            subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+                            st.success(f"System Launching for {selected_exchange_name}:{token_id}...")
                         
                         st.session_state.backend_running = True
-                        st.success(f"System Online for {selected_exchange_name}:{token_id}")
-                        time.sleep(1)
+                        time.sleep(2)
                         st.rerun()
         else:
             if st.button("🛑 Stop Backend System"):
-                if st.session_state.backend_thread:
-                    st.session_state.backend_thread.stop()
+                # Signal stop via file (backend.py checks for STOP_FILE)
+                STOP_FILE = "stop_backend.txt"
+                with open(STOP_FILE, "w") as f:
+                    f.write("stop")
                 st.session_state.backend_running = False
-                st.session_state.ohlc_data = [] # Reset data
-                st.session_state.vwma_data = []
-                st.warning("System Stopped.")
+                st.warning("Stop signal sent to backend.")
                 time.sleep(1)
                 st.rerun()
                 
@@ -255,102 +252,8 @@ if menu == "📊 Dashboard":
             st.session_state.current_ltp = 0.0
             st.rerun()
 
-    # Layout
-    col1, col2 = st.columns(2)
-    ltp_metric = col1.empty()
-    vwma_metric = col2.empty()
-    chart_placeholder = st.empty()
-
-    # Data Display
-    if st.session_state.backend_running:
-        try:
-            # Sync data from background thread instance safely
-            backend = st.session_state.backend_thread
-            if backend:
-                if not backend.is_running or not backend.is_connected:
-                    st.session_state.backend_running = False
-                    st.session_state.last_error = f"Disconnection: {backend.close_reason}"
-                    st.rerun()
-
-                with backend.lock:
-                    st.session_state.ohlc_data = backend.ohlc_bars.copy()
-                    st.session_state.vwma_data = backend.vwma_bars.copy()
-                    st.session_state.current_ltp = float(backend.latest_ltp)
-
-            ltp = st.session_state.current_ltp
-            ohlc = st.session_state.ohlc_data
-            vwma = st.session_state.vwma_data
-            
-            latest_vwma = vwma[-1]['value'] if vwma else 0.0
-            
-            ltp_metric.metric("Current Price", f"₹{ltp:,.2f}")
-            vwma_metric.metric("VWMA (20)", f"₹{latest_vwma:,.2f}")
-            
-            if ohlc:
-                chart_options = {
-                    "height": 500,
-                    "layout": {
-                        "background": {"type": 'solid', "color": '#0e1117'},
-                        "textColor": '#d1d4dc',
-                        "fontSize": 10
-                    },
-                    "grid": {"vertLines": {"color": "#242733"}, "horzLines": {"color": "#242733"}},
-                    "timeScale": {"timeVisible": True, "secondsVisible": True, "borderColor": '#485c7b'},
-                }
-                series = [{"type": 'Candlestick', "data": ohlc, "options": {"upColor": '#26a69a', "downColor": '#ef5350'}}]
-                if vwma:
-                    series.append({"type": 'Line', "data": vwma, "options": {"color": '#2196f3', "lineWidth": 2, "title": 'VWMA'}})
-                
-                with chart_placeholder:
-                    renderLightweightCharts([{"chart": chart_options, "series": series}], 'integrated_chart')
-            else:
-                chart_placeholder.info("Connected. Waiting for the first bar (5 ticks)...")
-        except Exception as e:
-            st.error(f"UI Error: {e}")
-            
-        # ================= AUTOMATED TRADING LOGIC =================
-        if st.session_state.auto_trading_active:
-            try:
-                ltp = st.session_state.current_ltp
-                vwma = st.session_state.vwma_data[-1]['value'] if st.session_state.vwma_data else None
-                
-                if ltp and vwma:
-                    tsym = st.session_state.get('trade_tsym')
-                    # Calculate total quantity: n lots * m lot size
-                    num_lots = st.session_state.get('trade_num_lots', 1)
-                    lot_size = st.session_state.get('trade_lot_size', 1)
-                    qty = num_lots * lot_size
-                    exch = st.session_state.get('trade_exch')
-                    
-                    if tsym and qty and exch:
-                        side = None
-                        if ltp > vwma and st.session_state.last_order_side != 'BUY':
-                            side = 'B'
-                            side_label = 'BUY'
-                        elif ltp < vwma and st.session_state.last_order_side != 'SELL':
-                            side = 'S'
-                            side_label = 'SELL'
-                        
-                        if side:
-                            log_msg = f"[{datetime.now().strftime('%H:%M:%S')}] Attempting {side_label} for {tsym} @ {ltp} (VWMA: {vwma:.2f})"
-                            st.session_state.trading_logs.append(log_msg)
-                            
-                            response = place_flattrade_order(tsym, qty, exch, side)
-                            
-                            if response.get('stat') == 'Ok':
-                                st.session_state.last_order_side = side_label
-                                success_msg = f"✅ {side_label} Order Placed! ID: {response.get('norenordno')}"
-                                st.session_state.trading_logs.append(success_msg)
-                            else:
-                                error_msg = f"❌ Order Failed: {response.get('emsg')}"
-                                st.session_state.trading_logs.append(error_msg)
-            except Exception as e:
-                st.session_state.trading_logs.append(f"⚠️ Trading logic error: {e}")
-
-        time.sleep(1)
-        st.rerun()
-    else:
-        chart_placeholder.info("System Offline. Start backend in sidebar or login via 'Portal'.")
+    # Call Fragment for Live Updates
+    display_dashboard_fragment(token_id, exchange_type, exchange_mapping)
 
 elif menu == "🔐 Login Portal": # Login Portal
     st.header("🔐 AngelOne Login")

@@ -8,6 +8,7 @@ import os
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 from logzero import logger
 import traceback
+import sys
 
 import sys
 
@@ -110,12 +111,18 @@ class MarketDataBackend:
                 "ltp": float(self.latest_ltp),
                 "ohlc": self.ohlc_bars,
                 "vwma": self.vwma_bars,
-                "last_update": time.time()
+                "last_update": time.time(),
+                "token_id": str(token_id),
+                "exchange_type": int(exchange_type)
             }
+            # Save locally
             temp_file = DATA_FILE + ".tmp"
             with open(temp_file, "w") as f:
                 json.dump(data, f)
             os.replace(temp_file, DATA_FILE)
+            
+            # (Firebase code removed)
+                
         except Exception as e:
             logger.error(f"Data save error: {e}")
 

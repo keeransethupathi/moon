@@ -13,3 +13,6 @@ credentials.json
 page_source.html
 *.png
 .streamlit/
+firebase_key.json
+firebase_export.json
+.gemini/
