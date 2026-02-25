@@ -583,16 +583,50 @@ elif menu == "📦 Scrip Master":
     
     SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
     
-    @st.cache_data(ttl=3600)
+    @st.cache_data(ttl=86400) # Cache for 24 hours
     def fetch_scrip_master():
+        LOCAL_SCRIP_CACHE = "scrip_master.json"
+        
+        # 1. Try Loading from Local Cache first (if fresh)
+        if os.path.exists(LOCAL_SCRIP_CACHE):
+            try:
+                mtime = os.path.getmtime(LOCAL_SCRIP_CACHE)
+                if time.time() - mtime < 86400: # 24 hours
+                    with open(LOCAL_SCRIP_CACHE, "r") as f:
+                        return json.load(f)
+            except Exception as fe:
+                print(f"Cache Load Error: {fe}")
+
+        # 2. Fetch from URL
         try:
-            with st.spinner("Fetching scrip master data..."):
-                response = requests.get(SCRIP_MASTER_URL, timeout=30)
+            with st.spinner("Downloading scrip master (~30MB)..."):
+                response = requests.get(SCRIP_MASTER_URL, timeout=60)
                 if response.status_code == 200:
-                    return response.json()
-                return None
-        except:
-            return None
+                    data = response.json()
+                    # Save to cache
+                    try:
+                        with open(LOCAL_SCRIP_CACHE, "w") as f:
+                            json.dump(data, f)
+                    except:
+                        pass
+                    return data
+                else:
+                    st.error(f"Scrip Master Fetch Failed: HTTP {response.status_code}")
+                    return None
+        except requests.exceptions.Timeout:
+            st.error("Scrip Master Fetch Timeout (60s). Try refreshing or check internet.")
+        except Exception as e:
+            st.error(f"Scrip Master Request Error: {str(e)}")
+        
+        # 3. Fallback to old cache even if stale
+        if os.path.exists(LOCAL_SCRIP_CACHE):
+            try:
+                with open(LOCAL_SCRIP_CACHE, "r") as f:
+                    st.warning("Using stale scrip master data from cache.")
+                    return json.load(f)
+            except:
+                pass
+        return None
 
     def get_flattrade_tsym(token_data):
         try:
