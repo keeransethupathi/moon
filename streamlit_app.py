@@ -160,6 +160,28 @@ if 'trading_logs' not in st.session_state:
 if 'last_order_side' not in st.session_state:
     st.session_state.last_order_side = None
 
+# Scrip Master & Dashboard Sync State
+if 'selected_expiry' not in st.session_state:
+    st.session_state.selected_expiry = None
+if 'selected_instrument' not in st.session_state:
+    st.session_state.selected_instrument = None
+if 'selected_strike' not in st.session_state:
+    st.session_state.selected_strike = None
+if 'dashboard_token' not in st.session_state:
+    st.session_state.dashboard_token = "472789"
+if 'dashboard_exchange' not in st.session_state:
+    st.session_state.dashboard_exchange = "MCX"
+if 'trade_tsym_input' not in st.session_state:
+    st.session_state.trade_tsym_input = "NIFTY24FEB26C26000"
+if 'trade_exch_input' not in st.session_state:
+    st.session_state.trade_exch_input = "NFO"
+
+# Automation Strategy State
+if 'trading_phase' not in st.session_state:
+    st.session_state.trading_phase = 'BUY' # Starts with BUY
+if 'last_order_price' not in st.session_state:
+    st.session_state.last_order_price = 0.0
+
 # Silence ScriptRunContext and other warnings
 logging.getLogger("streamlit.runtime.scriptrunner").setLevel(logging.ERROR)
 logging.getLogger("smartWebSocketV2").setLevel(logging.ERROR)
@@ -170,7 +192,7 @@ st.title("🛡️ AngelOne Intelligence Hub")
 # Sidebar Menu for Navigation
 with st.sidebar:
     st.header(" NAVIGATION")
-    menu = st.radio("Go to", ["📊 Dashboard", "🔐 Login Portal", "📈 Flattrade Login", "📦 Order Portal"])
+    menu = st.radio("Go to", ["📊 Dashboard", "🔐 Login Portal", "📈 Flattrade Login", "📦 Order Portal", "📦 Scrip Master"])
     st.divider()
 
 if menu == "📊 Dashboard":
@@ -251,6 +273,18 @@ if menu == "📊 Dashboard":
             st.session_state.vwma_data = []
             st.session_state.current_ltp = 0.0
             st.rerun()
+
+    # Dashboard Selection UI Updates (to support session state sync)
+    with st.sidebar:
+        exchange_mapping = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 4, "BFO": 6}
+        exch_list = list(exchange_mapping.keys())
+        default_idx = exch_list.index(st.session_state.dashboard_exchange) if st.session_state.dashboard_exchange in exch_list else 2
+        selected_exchange_name = st.selectbox("Exchange", options=exch_list, index=default_idx, key="dash_exch")
+        st.session_state.dashboard_exchange = selected_exchange_name
+        exchange_type = exchange_mapping[selected_exchange_name]
+        
+        token_id = st.text_input("Token ID", value=st.session_state.dashboard_token, key="dash_token")
+        st.session_state.dashboard_token = token_id
 
     # Call Fragment for Live Updates
     display_dashboard_fragment(token_id, exchange_type, exchange_mapping)
@@ -413,29 +447,112 @@ elif menu == "📈 Flattrade Login": # Flattrade Login
                 except Exception as e:
                     st.error(f"An error occurred: {e}")
 
-else: # Order Portal
-    st.header("📦 Flattrade Order Portal")
-    
+elif menu == "📦 Order Portal": # Order Portal
+    st.header("📦 Flattrade Auto-Order Hub")
+    # ---------------- AUTOMATION ENGINE ----------------
+    @st.fragment(run_every="1s")
+    def automation_monitor():
+        # 1. Strategy Logic & Data Refresh
+        ltp = 0.0
+        vwap = 0.0
+        data_available = False
+        
+        try:
+            DATA_FILE = "market_data.json"
+            if os.path.exists(DATA_FILE):
+                with open(DATA_FILE, "r") as f:
+                    data = json.load(f)
+                
+                ltp = data.get("ltp", 0.0)
+                vwma_data = data.get("vwma", [])
+                if vwma_data:
+                    vwap = vwma_data[-1].get("value", 0.0)
+                data_available = True
+                
+                # 2. Strategy Logic: Crossover (only if active)
+                if st.session_state.auto_trading_active:
+                    current_phase = st.session_state.trading_phase
+                    tsym = st.session_state.trade_tsym
+                    qty = st.session_state.trade_qty
+                    exch = st.session_state.trade_exch
+                    
+                    if current_phase == 'BUY' and ltp > vwap:
+                        res = place_flattrade_order(tsym, qty, exch, 'B')
+                        if res.get('stat') == 'Ok':
+                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ {ltp}")
+                            st.session_state.trading_phase = 'SELL'
+                            st.session_state.last_order_side = f"BUY @ {ltp}"
+                            st.rerun()
+                        else:
+                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ BUY FAILED: {res.get('emsg')}")
+                    
+                    elif current_phase == 'SELL' and ltp < vwap:
+                        res = place_flattrade_order(tsym, qty, exch, 'S')
+                        if res.get('stat') == 'Ok':
+                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ {ltp}")
+                            st.session_state.trading_phase = 'BUY'
+                            st.session_state.last_order_side = f"SELL @ {ltp}"
+                            st.rerun()
+                        else:
+                            st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ SELL FAILED: {res.get('emsg')}")
+        except Exception as e:
+            st.session_state.trading_logs.append(f"⚠️ Monitor Error: {e}")
+
+        # 3. UI Display (Market Feed & Logs)
+        col_m1, col_m2 = st.columns([1, 1])
+        with col_m1:
+            st.subheader("Live Market Feed")
+            if data_available:
+                st.metric("LTP", f"{ltp:.2f}", delta=f"{ltp-vwap:.2f} (vs VWAP)")
+                st.write(f"**VWAP:** {vwap:.2f}")
+            else:
+                st.info("Waiting for market data...")
+        
+        with col_m2:
+            st.subheader("Activity Logs")
+            log_container = st.container(height=300)
+            with log_container:
+                for log in reversed(st.session_state.trading_logs):
+                    st.write(log)
+
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("Configuration")
-        trade_tsym = st.text_input("Trading Symbol (tsym)", value="NIFTY24FEB26C26000", key="trade_tsym_input")
+        trade_tsym = st.text_input("Trading Symbol (tsym)", value=st.session_state.trade_tsym_input, key="trade_tsym_input_ui")
         st.session_state.trade_tsym = trade_tsym
         
-        trade_num_lots = st.number_input("Number of Lots (n)", value=1, min_value=1, step=1, key="trade_num_lots_input")
-        st.session_state.trade_num_lots = trade_num_lots
+        trade_num_lots = st.number_input("Number of Lots (n)", value=1, min_value=1, step=1, key="trade_num_lots_input_p")
         
-        trade_lot_size = st.number_input("Lot Size (m)", value=65, min_value=1, step=1, key="trade_lot_size_input")
-        st.session_state.trade_lot_size = trade_lot_size
+        # Determine Lot Size automatically based on index
+        default_lot = 65 
+        if "BANKNIFTY" in trade_tsym: default_lot = 15
+        elif "FINNIFTY" in trade_tsym: default_lot = 40
+        elif "SENSEX" in trade_tsym: default_lot = 20
+        
+        trade_lot_size = st.number_input("Lot Size (m)", value=default_lot, min_value=1, step=1, key="trade_lot_size_input_p")
         
         total_qty = trade_num_lots * trade_lot_size
         st.write(f"**Total Quantity:** {total_qty}")
         st.session_state.trade_qty = total_qty
         
-        trade_exch = st.selectbox("Exchange (exch)", options=["NSE", "NFO", "MCX", "BSE", "CDS"], index=1, key="trade_exch_input")
+        exch_map = {"NSE": 1, "NFO": 2, "MCX": 5, "BSE": 3, "CDS": 4, "BFO": 6}
+        trade_exch = st.selectbox("Exchange (exch)", options=list(exch_map.keys()), index=1, key="trade_exch_input_p")
         st.session_state.trade_exch = trade_exch
         
+        st.divider()
+        
+        # Strategy Monitor
+        st.subheader("Strategy Monitor")
+        m_c1, m_c2 = st.columns(2)
+        with m_c1:
+            st.write("**Next Action:**")
+            color = "#26a69a" if st.session_state.trading_phase == 'BUY' else "#ef5350"
+            st.markdown(f"<h3 style='color: {color}; margin:0;'>{st.session_state.trading_phase}</h3>", unsafe_allow_html=True)
+        with m_c2:
+            st.write("**Status:**")
+            st.write("🟢 Active" if st.session_state.auto_trading_active else "🔴 Paused")
+
         st.divider()
         
         if not st.session_state.auto_trading_active:
@@ -444,26 +561,141 @@ else: # Order Portal
                     st.error("Backend System is Offline! Start it in the Dashboard first.")
                 else:
                     st.session_state.auto_trading_active = True
-                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] Auto Trading Started.")
+                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Strategy Activated.")
                     st.rerun()
         else:
-            if st.button("🛑 STOP AUTO TRADING", type="primary", use_container_width=True):
+            if st.button("🛑 STOP AUTO TRADING", type="secondary", use_container_width=True):
                 st.session_state.auto_trading_active = False
-                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] Auto Trading Stopped.")
+                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Strategy Stopped.")
                 st.rerun()
-        
-        st.write(f"**Trading Status:** {'🟢 ACTIVE' if st.session_state.auto_trading_active else '🔴 INACTIVE'}")
-        if st.session_state.last_order_side:
-            st.write(f"**Last Action:** {st.session_state.last_order_side}")
 
     with col2:
-        st.subheader("Activity Logs")
-        log_container = st.container(height=400)
-        with log_container:
-            for log in reversed(st.session_state.trading_logs):
-                st.write(log)
+        # Combined Monitor Fragment Call
+        automation_monitor()
         
         if st.button("🗑️ Clear Logs"):
             st.session_state.trading_logs = []
             st.session_state.last_order_side = None
             st.rerun()
+
+elif menu == "📦 Scrip Master":
+    st.header("📦 Scrip Master")
+    
+    SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+    
+    @st.cache_data(ttl=3600)
+    def fetch_scrip_master():
+        try:
+            with st.spinner("Fetching scrip master data..."):
+                response = requests.get(SCRIP_MASTER_URL, timeout=30)
+                if response.status_code == 200:
+                    return response.json()
+                return None
+        except:
+            return None
+
+    def get_flattrade_tsym(token_data):
+        try:
+            name = token_data['name'].strip().upper()
+            raw_exp = token_data['expiry'].strip().upper()
+            dt = datetime.strptime(raw_exp, '%d%b%Y')
+            
+            strike_val = pd.to_numeric(token_data['strike'], errors='coerce') / 100
+            strike = f"{strike_val:.0f}"
+            
+            exch = token_data['exch_seg']
+            
+            if exch in ['BFO', 'BSE']:
+                # SENSEX BFO format: [NAME][YY][MMM][STRIKE][CE/PE]
+                exp_fmt = dt.strftime('%y%b').upper()
+                opt_type = 'CE' if token_data['symbol'].endswith('CE') else 'PE'
+                return f"{name}{exp_fmt}{strike}{opt_type}"
+            else:
+                # NFO format: [NAME][DD][MMM][YY][C/P][STRIKE]
+                exp_fmt = dt.strftime('%d%b%y').upper()
+                opt_type = 'C' if token_data['symbol'].endswith('CE') else 'P'
+                return f"{name}{exp_fmt}{opt_type}{strike}"
+        except:
+            return "N/A"
+
+    def render_token_card(title, token_data, color):
+        if token_data is not None:
+            tsym = get_flattrade_tsym(token_data)
+            st.markdown(f"""
+            <div style="background-color: #161b22; border: 1px solid {color}; border-radius: 12px; padding: 20px; text-align: center;">
+                <div style="color: #8b949e; font-size: 0.9rem; margin-bottom: 10px;">{title}</div>
+                <div style="color: {color}; font-size: 1.8rem; font-weight: 800; margin-bottom: 5px;">{token_data['symbol']}</div>
+                <div style="background-color: #0d1117; padding: 5px; border-radius: 4px; color: #58a6ff; font-family: monospace; font-size: 1.1rem; margin: 10px 0;">{tsym}</div>
+                <div style="color: #8b949e; font-size: 1.2rem; font-weight: 600;">ID: {token_data['token']}</div>
+                <div style="color: #8b949e; font-size: 0.8rem; margin-top: 10px;">Exchange: {token_data['exch_seg']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button(f"📊 Track {token_data['symbol']}", key=f"track_{token_data['token']}", use_container_width=True):
+                st.session_state.dashboard_token = str(token_data['token'])
+                st.session_state.dashboard_exchange = token_data['exch_seg']
+                st.toast(f"🚀 {token_data['symbol']} loaded into Dashboard!")
+        else:
+            st.info(f"No {title} data found")
+
+    raw_data = fetch_scrip_master()
+    if not raw_data:
+        st.error("Failed to load scrip master.")
+    else:
+        df = pd.DataFrame(raw_data)
+        
+        # UI Selection Flow
+        st.subheader("Tiered Selection")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            instr_options = ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"]
+            new_instr = st.selectbox("Select Index", options=instr_options)
+            if new_instr != st.session_state.selected_instrument:
+                st.session_state.selected_instrument = new_instr
+                st.session_state.selected_expiry = None
+                st.session_state.selected_strike = None
+                st.rerun()
+
+        # Filtering for Expiries
+        filtered_df = df[df['name'] == st.session_state.selected_instrument]
+        if st.session_state.selected_instrument == 'SENSEX':
+            filtered_df = filtered_df[filtered_df['exch_seg'].isin(['BFO', 'BSE'])]
+        else:
+            filtered_df = filtered_df[filtered_df['exch_seg'] == 'NFO']
+            
+        exp_list = sorted(list(set(filtered_df['expiry'].dropna().str.strip().str.upper())))
+        
+        with col2:
+            new_exp = st.selectbox("Select Expiry", options=[None] + exp_list, index=0 if not st.session_state.selected_expiry else exp_list.index(st.session_state.selected_expiry)+1)
+            if new_exp != st.session_state.selected_expiry:
+                st.session_state.selected_expiry = new_exp
+                st.session_state.selected_strike = None
+                st.rerun()
+
+        if st.session_state.selected_expiry:
+            exp_df = filtered_df[filtered_df['expiry'].str.strip().str.upper() == st.session_state.selected_expiry]
+            strike_list = sorted(list(set(pd.to_numeric(exp_df['strike'], errors='coerce') / 100)))
+            strike_list = [f"{s:.0f}" for s in strike_list]
+            
+            with col3:
+                new_strike = st.selectbox("Select Strike", options=[None] + strike_list, index=0 if not st.session_state.selected_strike else strike_list.index(st.session_state.selected_strike)+1)
+                if new_strike != st.session_state.selected_strike:
+                    st.session_state.selected_strike = new_strike
+                    st.rerun()
+
+        if st.session_state.selected_strike:
+            st.divider()
+            strike_float = float(st.session_state.selected_strike) * 100
+            final_df = exp_df[pd.to_numeric(exp_df['strike'], errors='coerce') == strike_float]
+            
+            ce_token = final_df[final_df['symbol'].str.endswith('CE', na=False)].to_dict('records')
+            pe_token = final_df[final_df['symbol'].str.endswith('PE', na=False)].to_dict('records')
+            
+            c1, c2 = st.columns(2)
+            with c1: render_token_card("CALL OPTION", ce_token[0] if ce_token else None, "#26a69a")
+            with c2: render_token_card("PUT OPTION", pe_token[0] if pe_token else None, "#ef5350")
+            
+            if st.button("Clear Selection"):
+                st.session_state.selected_expiry = None
+                st.session_state.selected_strike = None
+                st.rerun()

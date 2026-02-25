@@ -40,30 +40,36 @@ def place_flattrade_order(tsym, qty, exch, trantype):
         "actid": uid,
         "exch": exch,
         "tsym": tsym,
-        "qty": str(qty),
+        "qty": str(qty),       # NorenAPI requires all parameters to be strings
         "prd": "M",            # Margin/Intraday
         "trantype": trantype,  # 'B' or 'S'
         "prctyp": "MKT",       # Market
         "prc": "0",
         "blprc": "0",
-        "ret": "DAY"
+        "ret": "DAY",
+        "amo": "NO",
+        "ordersource": "API",
+        "remarks": "OrderPortal"
     }
 
-    body = (
-        "jData=" + json.dumps(order_data, separators=(",", ":")) +
-        "&jKey=" + jkey
-    )
+    # Construct the body as a raw string exactly as expected by many NorenAPI implementations
+    jdata_compact = json.dumps(order_data, separators=(",", ":"))
+    body = f"jData={jdata_compact}&jKey={jkey}"
 
     headers = {
         "Content-Type": "application/x-www-form-urlencoded"
     }
 
     try:
+        # Some NorenAPI servers prefer the body string directly without further URL encoding by requests
         response = requests.post(url, data=body, headers=headers)
         if response.status_code == 200:
             return response.json()
         else:
-            return {"stat": "Not Ok", "emsg": f"HTTP {response.status_code}"}
+            return {
+                "stat": "Not Ok", 
+                "emsg": f"HTTP {response.status_code}: {response.text[:100]}"
+            }
     except Exception as e:
         return {"stat": "Not Ok", "emsg": str(e)}
 

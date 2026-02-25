@@ -82,70 +82,100 @@ def auto_login(creds=None, headless=False):
         driver.get(auth_url)
         print("Navigated to login page")
 
+        # Helper for resilient input
+        def send_keys_resilient(xpath_list, value, label):
+            for xpath in xpath_list:
+                for attempt in range(3):
+                    try:
+                        element = wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
+                        wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+                        
+                        # Clear and Type using standard method
+                        element.clear()
+                        element.send_keys(value)
+                        
+                        # Force update via JavaScript and events (Crucial for Vue/React)
+                        js_script = """
+                        var element = arguments[0];
+                        var val = arguments[1];
+                        element.value = val;
+                        element.dispatchEvent(new Event('input', { bubbles: true }));
+                        element.dispatchEvent(new Event('change', { bubbles: true }));
+                        """
+                        driver.execute_script(js_script, element, value)
+                        
+                        # Verify the value stuck
+                        current_val = element.get_attribute('value')
+                        if current_val == value:
+                            print(f"Entered and verified {label} using {xpath}")
+                            return True
+                        else:
+                            print(f"Value verification failed for {label}: expected {value}, got {current_val}")
+                    except Exception as ex:
+                        print(f"Attempt {attempt+1} fail for {label} ({xpath}): {ex}")
+                        time.sleep(1)
+            return False
+
         # Wait for and fill username
         wait = WebDriverWait(driver, 15)
-        user_input = wait.until(EC.presence_of_element_located((By.XPATH, "//input[@placeholder='User ID']")))
-        user_input.send_keys(creds['username'])
-        print("Entered username")
+        
+        # Possible User ID selectors
+        user_xpaths = ["//input[@placeholder='User ID']", "//input[@placeholder='Username']", "//input[@name='user_id']"]
+        if not send_keys_resilient(user_xpaths, creds['username'], "username"):
+            return {"status": "error", "message": "Failed to find username input"}
 
         # Fill password
-        pass_input = driver.find_element(By.XPATH, "//input[@placeholder='Password']")
-        pass_input.send_keys(creds['password'])
-        print("Entered password")
+        pass_xpaths = ["//input[@placeholder='Password']", "//input[@name='password']"]
+        if not send_keys_resilient(pass_xpaths, creds['password'], "password"):
+            return {"status": "error", "message": "Failed to find password input"}
 
         # Fill TOTP
-        totp_input = driver.find_element(By.XPATH, "//input[@placeholder='OTP / TOTP']")
-        totp_input.send_keys(token)
-        print("Entered TOTP")
+        totp_xpaths = ["//input[@placeholder='OTP / TOTP']", "//input[@placeholder='TOTP']", "//input[@name='otp']"]
+        if not send_keys_resilient(totp_xpaths, token, "TOTP"):
+            return {"status": "error", "message": "Failed to find TOTP input"}
 
         # Click Login
         print("Clicking login button...")
-        time.sleep(2)  # Wait for inputs to be registered
+        time.sleep(1)
+        
         try:
-            # Use JavaScript to find the button with "Log In" text and click it
-            # This is much more robust against nested spans and case-sensitivity/white-space
+            # Use JavaScript for a robust click
             script = """
             var buttons = document.querySelectorAll('button');
             for (var i = 0; i < buttons.length; i++) {
-                if (buttons[i].textContent.includes('Log In')) {
+                var text = buttons[i].textContent.toLowerCase();
+                if (text.includes('log in') || text.includes('submit') || text.includes('authorize')) {
                     buttons[i].click();
                     return true;
                 }
             }
             return false;
             """
-            clicked = driver.execute_script(script)
-            if clicked:
-                print("Clicked login button via JS")
-            else:
-                # Fallback to standard wait if JS fails to find it
-                login_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Log In')]")))
-                driver.execute_script("arguments[0].click();", login_btn)
-                print("Clicked login button via backup XPath")
-        except Exception as e:
-            print(f"Failed to click login button: {e}")
-            # Final attempt: try clicking any button that looks like the primary one
-            try:
-                # Use a loop to retry clicking in case of stale elements
-                for _ in range(3):
+            for attempt in range(3):
+                clicked = driver.execute_script(script)
+                if clicked:
+                    print(f"Clicked login button via JS (attempt {attempt+1})")
+                    break
+                else:
+                    # Fallback to standard wait if JS fails 
                     try:
-                        primary_btn = driver.find_element(By.CSS_SELECTOR, "button.shine-button")
-                        driver.execute_script("arguments[0].click();", primary_btn)
-                        print("Clicked primary button via CSS selector")
+                        login_btn = driver.find_element(By.XPATH, "//button[contains(translate(., 'LOGIN', 'login'), 'login')]")
+                        driver.execute_script("arguments[0].click();", login_btn)
+                        print("Clicked login button via backup XPath")
                         break
-                    except Exception as inner_e:
-                        print(f"Retry click failed: {inner_e}")
-                        time.sleep(1)
-            except:
-                return {"status": "error", "message": f"Login button click failed: {str(e)}"}
+                    except:
+                        pass
+                time.sleep(1)
+        except Exception as e:
+            print(f"Login click failed: {e}")
 
         # Wait for redirect and capture code
         print("Waiting for redirect...")
-        # Increased wait time and use conditional wait for URL change
         try:
-            WebDriverWait(driver, 15).until(lambda d: "code=" in d.current_url)
+            # Wait for URL to contain 'code=' OR for page to show error
+            WebDriverWait(driver, 30).until(lambda d: "code=" in d.current_url or "error" in d.current_url.lower())
         except:
-            pass
+            print("Redirect timeout or potential error page")
             
         current_url = driver.current_url
         print(f"Current URL: {current_url}")
@@ -155,16 +185,17 @@ def auto_login(creds=None, headless=False):
             print(f"Captured request_code: {request_code}")
             return {"status": "success", "code": request_code}
         else:
-            # Check if there's an error message on the page
+            # Check for error message on the page
             error_msg = "Failed to capture request_code from URL"
             try:
-                error_element = driver.find_element(By.CLASS_NAME, "v-snack__content")
-                if error_element.is_displayed():
-                    error_msg = error_element.text
-                    print(f"Login error: {error_msg}")
+                alerts = driver.find_elements(By.XPATH, "//*[contains(@class, 'v-snack') or contains(@class, 'v-alert') or contains(@role, 'alert')]")
+                for alert in alerts:
+                    if alert.is_displayed() and alert.text:
+                        error_msg = alert.text
+                        break
             except:
                 pass
-            return {"status": "error", "message": error_msg}
+            return {"status": "error", "message": f"Login failed: {error_msg}"}
 
     except Exception as e:
         print(f"Automation error: {e}")
