@@ -80,27 +80,38 @@ def auto_login(creds=None, headless=False):
                 driver = webdriver.Chrome(options=chrome_options)
 
         driver.get(auth_url)
-        print("Navigated to login page")
+        print(f"Navigated to login page: {auth_url.split('=')[0]}=...")
+        time.sleep(3) # Give page more time to settle on cloud environments
 
         # Helper for resilient input
         def send_keys_resilient(xpath_list, value, label):
+            if not value:
+                print(f"Error: No value provided for {label}")
+                return False
             for xpath in xpath_list:
                 for attempt in range(3):
                     try:
                         element = wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
                         wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
                         
-                        # Clear and Type using standard method
+                        # Human-like interaction: Click -> Clear -> Type Char-by-char -> Blur
+                        driver.execute_script("arguments[0].click();", element)
+                        time.sleep(0.2)
                         element.clear()
-                        element.send_keys(value)
+                        
+                        for char in value:
+                            element.send_keys(char)
+                            time.sleep(0.05) if headless else time.sleep(0.02)
                         
                         # Force update via JavaScript and events (Crucial for Vue/React)
                         js_script = """
                         var element = arguments[0];
                         var val = arguments[1];
                         element.value = val;
+                        // Dispatch multiple events to ensure framework detection
                         element.dispatchEvent(new Event('input', { bubbles: true }));
                         element.dispatchEvent(new Event('change', { bubbles: true }));
+                        element.dispatchEvent(new Event('blur', { bubbles: true }));
                         """
                         driver.execute_script(js_script, element, value)
                         
