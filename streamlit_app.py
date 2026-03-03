@@ -691,7 +691,10 @@ elif menu == "📦 Scrip Master":
         else:
             filtered_df = filtered_df[filtered_df['exch_seg'] == 'NFO']
             
-        exp_list = sorted(list(set(filtered_df['expiry'].dropna().str.strip().str.upper())))
+        exp_list = sorted(
+            list(set(filtered_df['expiry'].dropna().str.strip().str.upper())),
+            key=lambda x: datetime.strptime(x, '%d%b%Y')
+        )
         
         with col2:
             new_exp = st.selectbox("Select Expiry", options=[None] + exp_list, index=0 if not st.session_state.selected_expiry else exp_list.index(st.session_state.selected_expiry)+1)

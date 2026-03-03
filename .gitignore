@@ -10,6 +10,7 @@ logs/
 .DS_Store
 *.tmp
 credentials.json
+scrip_master.json
 page_source.html
 *.png
 .streamlit/
