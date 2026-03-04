@@ -12,7 +12,12 @@ from webdriver_manager.chrome import ChromeDriverManager
 import requests
 import hashlib
 
-def auto_login(creds=None, headless=False):
+def auto_login(creds=None, headless=False, log_func=None):
+    def log(msg):
+        print(msg)
+        if log_func:
+            log_func(msg)
+
     # Load credentials if not provided
     if creds is None:
         # Try environment variables first
@@ -41,7 +46,7 @@ def auto_login(creds=None, headless=False):
     # Generate TOTP
     totp = pyotp.TOTP(creds['totp_key'])
     token = totp.now()
-    print(f"Generated TOTP: {token}")
+    log(f"Generated TOTP: {token}")
 
     # Setup Selenium
     chrome_options = Options()
@@ -80,13 +85,13 @@ def auto_login(creds=None, headless=False):
                 driver = webdriver.Chrome(options=chrome_options)
 
         driver.get(auth_url)
-        print(f"Navigated to login page: {auth_url.split('=')[0]}=...")
+        log(f"Navigated to login page: {auth_url.split('=')[0]}=...")
         time.sleep(3) # Give page more time to settle on cloud environments
 
         # Helper for resilient input
         def send_keys_resilient(xpath_list, value, label):
             if not value:
-                print(f"Error: No value provided for {label}")
+                log(f"Error: No value provided for {label}")
                 return False
             for xpath in xpath_list:
                 for attempt in range(3):
@@ -118,12 +123,12 @@ def auto_login(creds=None, headless=False):
                         # Verify the value stuck
                         current_val = element.get_attribute('value')
                         if current_val == value:
-                            print(f"Entered and verified {label} using {xpath}")
+                            log(f"Entered and verified {label} using {xpath}")
                             return True
                         else:
-                            print(f"Value verification failed for {label}: expected {value}, got {current_val}")
+                            log(f"Value verification failed for {label}: expected {value}, got {current_val}")
                     except Exception as ex:
-                        print(f"Attempt {attempt+1} fail for {label} ({xpath}): {ex}")
+                        log(f"Attempt {attempt+1} fail for {label} ({xpath}): {ex}")
                         time.sleep(1)
             return False
 
@@ -146,7 +151,7 @@ def auto_login(creds=None, headless=False):
             return {"status": "error", "message": "Failed to find TOTP input"}
 
         # Click Login
-        print("Clicking login button...")
+        log("Clicking login button...")
         time.sleep(1)
         
         try:
@@ -165,23 +170,23 @@ def auto_login(creds=None, headless=False):
             for attempt in range(3):
                 clicked = driver.execute_script(script)
                 if clicked:
-                    print(f"Clicked login button via JS (attempt {attempt+1})")
+                    log(f"Clicked login button via JS (attempt {attempt+1})")
                     break
                 else:
                     # Fallback to standard wait if JS fails 
                     try:
                         login_btn = driver.find_element(By.XPATH, "//button[contains(translate(., 'LOGIN', 'login'), 'login')]")
                         driver.execute_script("arguments[0].click();", login_btn)
-                        print("Clicked login button via backup XPath")
+                        log("Clicked login button via backup XPath")
                         break
                     except:
                         pass
                 time.sleep(1)
         except Exception as e:
-            print(f"Login click failed: {e}")
+            log(f"Login click failed: {e}")
 
         # Wait for redirect and capture code
-        print("Waiting for redirect and handling potential modals...")
+        log("Waiting for redirect and handling potential modals...")
         try:
             # Wait for either the redirect URL OR the password change modal
             def wait_for_login_result(d):
@@ -193,7 +198,7 @@ def auto_login(creds=None, headless=False):
                 try:
                     confirm_btn = d.find_elements(By.XPATH, "//button[contains(., 'CONFIRM')]")
                     if confirm_btn and confirm_btn[0].is_displayed():
-                        print("Detected 'Confirm Password Change' modal. Clicking CONFIRM...")
+                        log("Detected 'Confirm Password Change' modal. Clicking CONFIRM...")
                         d.execute_script("arguments[0].click();", confirm_btn[0])
                         return False 
                 except:
@@ -205,7 +210,7 @@ def auto_login(creds=None, headless=False):
                     error_elements = d.find_elements(By.XPATH, "//*[contains(@class, 'error--text') or contains(@class, 'v-snack__content') or contains(@class, 'v-alert__content')]")
                     for elem in error_elements:
                         if elem.is_displayed() and elem.text:
-                            print(f"Page Error Detected: {elem.text}")
+                            log(f"Page Error Detected: {elem.text}")
                             # If we see a hard error, we can stop waiting
                             if any(msg in elem.text.lower() for msg in ["invalid", "incorrect", "expired", "required"]):
                                 return True
@@ -215,28 +220,28 @@ def auto_login(creds=None, headless=False):
                 # 4. Check for mandatory password change screen
                 try:
                     if "Change password" in d.page_source or "new password" in d.page_source.lower():
-                        print("Detected mandatory password change screen.")
+                        log("Detected mandatory password change screen.")
                         return True
                 except:
                     pass
 
                 # 5. Check for specific error messages in URL
                 if "error" in d.current_url.lower():
-                    print(f"Error detected in URL: {d.current_url}")
+                    log(f"Error detected in URL: {d.current_url}")
                     return True
                     
                 return False
 
             WebDriverWait(driver, 30).until(wait_for_login_result)
         except Exception as we:
-            print(f"Wait for redirect/modal finished or timed out: {we}")
+            log(f"Wait for redirect/modal finished or timed out: {we}")
             
         current_url = driver.current_url
-        print(f"Current URL: {current_url}")
+        log(f"Current URL: {current_url}")
 
         if 'code=' in current_url:
             request_code = current_url.split('code=')[1].split('&')[0]
-            print(f"Captured request_code: {request_code}")
+            log(f"Captured request_code: {request_code}")
             return {"status": "success", "code": request_code}
         else:
             # 1. Check for mandatory password change screen specifically
@@ -257,7 +262,7 @@ def auto_login(creds=None, headless=False):
             return {"status": "error", "message": f"Login failed: {error_msg}"}
 
     except Exception as e:
-        print(f"Automation error: {e}")
+        log(f"Automation error: {e}")
         # Capture screenshot for debugging
         if driver:
             try:
@@ -265,9 +270,9 @@ def auto_login(creds=None, headless=False):
                     os.makedirs('logs')
                 screenshot_path = os.path.join('logs', f"login_error_{int(time.time())}.png")
                 driver.save_screenshot(screenshot_path)
-                print(f"Screenshot saved to {screenshot_path}")
+                log(f"Screenshot saved to {screenshot_path}")
             except Exception as e2:
-                print(f"Failed to save screenshot: {e2}")
+                log(f"Failed to save screenshot: {e2}")
         return {"status": "error", "message": str(e)}
     finally:
         if driver:

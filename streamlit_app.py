@@ -363,19 +363,26 @@ elif menu == "📈 Flattrade Login": # Flattrade Login
             from auto_login import auto_login, generate_access_token
             
             with st.status("Running automated login...") as status:
-                st.write("Initializing automation...")
+                log_placeholder = st.empty()
+                logs = []
+                
+                def ui_logger(msg):
+                    logs.append(msg)
+                    with log_placeholder.container():
+                        for m in logs[-5:]: # Show last 5 lines for focus
+                            st.write(f"› {m}")
+
                 # Try loading from secrets/env first via auto_login's internal logic
                 # or check if credentials.json exists as fallback
                 has_secrets = safe_get_secret('FT_USERNAME') is not None
                 if not os.path.exists('credentials.json') and not has_secrets:
                     st.error("No credentials found. Please set FT environment variables / secrets or provide `credentials.json`.")
                 else:
-                    st.write("Navigating to login page and filling details...")
-                    result = auto_login(headless=True)
+                    result = auto_login(headless=True, log_func=ui_logger)
                     
                     if result["status"] == "success":
                         request_code = result["code"]
-                        st.write(f"Captured request code: {request_code[:10]}...")
+                        st.write(f"✅ Captured request code: `{request_code[:10]}...`")
                         
                         st.write("Generating final access token...")
                         token = generate_access_token(request_code)
