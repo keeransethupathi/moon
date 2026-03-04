@@ -531,6 +531,7 @@ elif menu == "📦 Order Portal": # Order Portal
     with col1:
         st.subheader("Configuration")
         trade_tsym = st.text_input("Trading Symbol (tsym)", value=st.session_state.trade_tsym_input, key="trade_tsym_input_ui")
+        st.session_state.trade_tsym_input = trade_tsym # PERSIST: Update the source value so it stays on tab switch
         st.session_state.trade_tsym = trade_tsym
         
         trade_num_lots = st.number_input("Number of Lots (n)", value=1, min_value=1, step=1, key="trade_num_lots_input_p")
@@ -714,7 +715,10 @@ elif menu == "📦 Scrip Master":
             if st.button(f"📊 Track {token_data['symbol']}", key=f"track_{token_data['token']}", use_container_width=True):
                 st.session_state.dashboard_token = str(token_data['token'])
                 st.session_state.dashboard_exchange = token_data['exch_seg']
-                st.toast(f"🚀 {token_data['symbol']} loaded into Dashboard!")
+                # Sync with Order Portal
+                st.session_state.trade_tsym_input = tsym
+                st.session_state.trade_tsym = tsym
+                st.toast(f"🚀 {token_data['symbol']} loaded into Dashboard & Order Portal!")
         else:
             st.info(f"No {title} data found")
 
