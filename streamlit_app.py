@@ -79,7 +79,7 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
             if time.time() - last_update < 10:
                 st.session_state.backend_running = True
                 st.session_state.ohlc_data = data.get("ohlc", [])
-                st.session_state.vwma_data = data.get("vwma", [])
+                st.session_state.alma_data = data.get("alma", [])
                 st.session_state.current_ltp = float(data.get("ltp", 0.0))
                 st.session_state.last_data_ts = last_update
                 data_found = True
@@ -92,11 +92,11 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
     col1, col2 = st.columns(2)
     ltp = st.session_state.current_ltp
     ohlc = st.session_state.ohlc_data
-    vwma = st.session_state.get("vwma_data", [])
+    alma = st.session_state.get("alma_data", [])
     
-    latest_vwma = vwma[-1]['value'] if vwma else 0.0
+    latest_alma = alma[-1]['value'] if alma else 0.0
     col1.metric("Price", f"₹{ltp:,.2f}")
-    col2.metric("VWMA (20)", f"₹{latest_vwma:,.2f}")
+    col2.metric("ALMA (200)", f"₹{latest_alma:,.2f}")
     
     if ohlc:
         chart_options = {
@@ -110,8 +110,8 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
             "timeScale": {"timeVisible": True, "secondsVisible": True, "borderColor": '#485c7b'},
         }
         series = [{"type": 'Candlestick', "data": ohlc, "options": {"upColor": '#26a69a', "downColor": '#ef5350'}}]
-        if vwma:
-            series.append({"type": 'Line', "data": vwma, "options": {"color": '#ffeb3b', "lineWidth": 2, "title": 'VWMA'}})
+        if alma:
+            series.append({"type": 'Line', "data": alma, "options": {"color": '#ffeb3b', "lineWidth": 2, "title": 'ALMA'}})
         
         # Rendering directly in the fragment (without .empty()) reduces flicker
         renderLightweightCharts([{"chart": chart_options, "series": series}], 'integrated_chart')
@@ -150,10 +150,10 @@ st.markdown("""
 # ================= STATE MANAGEMENT =================
 if 'ohlc_data' not in st.session_state:
     st.session_state.ohlc_data = []
-if 'vidya_data' not in st.session_state:
-    st.session_state.vidya_data = []
-if 'vidya_slope' not in st.session_state:
-    st.session_state.vidya_slope = 0.0
+if 'alma_data' not in st.session_state:
+    st.session_state.alma_data = []
+if 'alma_slope' not in st.session_state:
+    st.session_state.alma_slope = 0.0
 if 'current_ltp' not in st.session_state:
     st.session_state.current_ltp = 0.0
 if 'backend_running' not in st.session_state:
@@ -283,8 +283,8 @@ if menu == "📊 Dashboard":
         
         if st.button("🗑️ Reset Data"):
             st.session_state.ohlc_data = []
-            st.session_state.vidya_data = []
-            st.session_state.vidya_slope = 0.0
+            st.session_state.alma_data = []
+            st.session_state.alma_slope = 0.0
             st.session_state.current_ltp = 0.0
             st.rerun()
 
@@ -509,8 +509,8 @@ elif menu == "📦 Order Portal": # Order Portal
                     data = json.load(f)
                 
                 ltp = data.get("ltp", 0.0)
-                vwma_data = data.get("vwma", [])
-                vwma_val = vwma_data[-1].get("value", 0.0) if vwma_data else 0.0
+                alma_data = data.get("alma", [])
+                alma_val = alma_data[-1].get("value", 0.0) if alma_data else 0.0
                 data_available = True
                 
                 # 2. Strategy Logic: Crossover (only if active)
@@ -521,18 +521,18 @@ elif menu == "📦 Order Portal": # Order Portal
                     exch = st.session_state.get('trade_exch')
                     
                     if tsym and qty > 0 and exch:
-                        # STATE 1: WAIT FOR DIP (Price must go below VWMA first)
+                        # STATE 1: WAIT FOR DIP (Price must go below ALMA first)
                         if current_phase == 'WAIT_FOR_DIP':
-                            if ltp < vwma_val:
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📉 Price below VWMA ({ltp:.2f} < {vwma_val:.2f}). Strategy ARMED for BUY.")
+                            if ltp < alma_val:
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📉 Price below ALMA ({ltp:.2f} < {alma_val:.2f}). Strategy ARMED for BUY.")
                                 st.session_state.trading_phase = 'BUY'
                                 st.rerun()
                         
                         # STATE 2: BUY (Armed, waiting for cross above)
-                        elif current_phase == 'BUY' and ltp > vwma_val:
+                        elif current_phase == 'BUY' and ltp > alma_val:
                             res = place_flattrade_order(tsym, qty, exch, 'B')
                             if res.get('stat') == 'Ok':
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ {ltp} (Price crossed above VWMA: {vwma_val:.2f})")
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO BUY: {tsym} @ {ltp} (Price crossed above ALMA: {alma_val:.2f})")
                                 st.session_state.trading_phase = 'SELL'
                                 st.session_state.last_order_side = f"BUY @ {ltp}"
                                 st.rerun()
@@ -540,10 +540,10 @@ elif menu == "📦 Order Portal": # Order Portal
                                 st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ BUY FAILED: {res.get('emsg')}")
                         
                         # STATE 3: SELL (Bought, waiting for cross below)
-                        elif current_phase == 'SELL' and ltp < vwma_val:
+                        elif current_phase == 'SELL' and ltp < alma_val:
                             res = place_flattrade_order(tsym, qty, exch, 'S')
                             if res.get('stat') == 'Ok':
-                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ {ltp} (Price crossed below VWMA: {vwma_val:.2f})")
+                                st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AUTO SELL: {tsym} @ {ltp} (Price crossed below ALMA: {alma_val:.2f})")
                                 st.session_state.trading_phase = 'WAIT_FOR_DIP' # RESET to wait for next cycle
                                 st.session_state.last_order_side = f"SELL @ {ltp}"
                                 st.rerun()
@@ -559,8 +559,8 @@ elif menu == "📦 Order Portal": # Order Portal
         with col_m1:
             st.subheader("Live Market Feed")
             if data_available:
-                st.metric("LTP", f"{ltp:.2f}", delta=f"{ltp-vwma_val:.2f} (vs VWMA)")
-                st.write(f"**VWMA:** {vwma_val:.2f}")
+                st.metric("LTP", f"{ltp:.2f}", delta=f"{ltp-alma_val:.2f} (vs ALMA)")
+                st.write(f"**ALMA:** {alma_val:.2f}")
             else:
                 st.info("Waiting for market data...")
         
@@ -628,7 +628,7 @@ elif menu == "📦 Order Portal": # Order Portal
                     st.session_state.auto_trading_active = True
                     st.session_state.trading_phase = 'WAIT_FOR_DIP' # INITIAL STATE
                     st.session_state.last_order_side = None
-                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Strategy Activated. Waiting for price code dip below VIDYA...")
+                    st.session_state.trading_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Strategy Activated. Waiting for price to dip below ALMA...")
                     st.rerun()
         else:
             if st.button("🛑 STOP AUTO TRADING", type="secondary", use_container_width=True):

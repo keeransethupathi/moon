@@ -22,8 +22,7 @@ exchange_type = int(sys.argv[1]) if len(sys.argv) > 1 else default_exchange
 token_id = sys.argv[2] if len(sys.argv) > 2 else default_token
 
 TICK_BAR_SIZE = 5
-VIDYA_PERIOD = 20
-CMO_PERIOD = 9
+ALMA_PERIOD = 200
 TOKEN_LIST = [{"exchangeType": exchange_type, "tokens": [token_id]}]
 CORRELATION_ID = f"backend_{token_id}"
 DATA_FILE = "market_data.json"
@@ -34,7 +33,7 @@ class MarketDataBackend:
     def __init__(self):
         self.lock = threading.Lock()
         self.ohlc_bars = []
-        self.vwma_bars = []
+        self.alma_bars = []
         self.raw_bars = []
         self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
         self.latest_ltp = 0.0
@@ -51,20 +50,40 @@ class MarketDataBackend:
             logger.error(f"Subscription Error: {e}")
 
     def on_data(self, wsapp, message):
-        if message and isinstance(message, dict) and "last_traded_price" in message:
+        if not message:
+            return
+
+        # SmartApi often sends messages as a list
+        if isinstance(message, list):
+            for msg in message:
+                self.process_message(msg)
+        else:
+            self.process_message(message)
+
+    def process_message(self, message):
+        if isinstance(message, dict) and "last_traded_price" in message:
             try:
                 ltp = message["last_traded_price"] / 100
                 qty = message.get("last_traded_quantity") or 1
-                ts = datetime.fromtimestamp(message["exchange_timestamp"] / 1000)
+                ts_raw = message.get("exchange_timestamp")
+                if ts_raw:
+                    ts = datetime.fromtimestamp(ts_raw / 1000)
+                else:
+                    ts = datetime.now()
+                
+                logger.info(f"Tick received: LTP={ltp}, Qty={qty}, TS={ts}")
                 self.add_tick(ltp, qty, ts)
             except Exception as e:
                 logger.error(f"Tick processing error: {e}")
+                logger.error(traceback.format_exc())
         else:
-            if "heartbeat" not in str(message).lower():
+            msg_str = str(message).lower()
+            if "heartbeat" not in msg_str and "success" not in msg_str:
                 logger.info(f"Other WS message: {message}")
 
     def on_error(self, wsapp, error):
         logger.error(f"### [v2.0] WebSocket Error: {error} ###")
+        logger.error(traceback.format_exc())
 
     def on_close(self, wsapp, code, msg):
         logger.warn(f"### [v2.0] WebSocket Closed: {code} - {msg} ###")
@@ -94,24 +113,26 @@ class MarketDataBackend:
                 self.ohlc_bars.append(bar)
                 self.raw_bars.append(bar)
                 
-                # VWMA Logic (Volume Weighted Moving Average - 20 period)
-                VWMA_PERIOD = 20
-                if len(self.ohlc_bars) >= VWMA_PERIOD:
-                    subset = self.ohlc_bars[-VWMA_PERIOD:]
-                    pv_sum = sum(b["close"] * b["volume"] for b in subset)
-                    v_sum = sum(b["volume"] for b in subset)
-                    vwma_val = float(pv_sum / v_sum) if v_sum > 0 else bar["close"]
-                    self.vwma_bars.append({"time": chart_time, "value": vwma_val})
+                # ALMA Logic (Arnaud Legoux Moving Average - 200 period)
+                if len(self.ohlc_bars) >= ALMA_PERIOD:
+                    closes = np.array([b["close"] for b in self.ohlc_bars[-ALMA_PERIOD:]])
+                    offset = 0.85
+                    sigma = 6.0
+                    m = offset * (ALMA_PERIOD - 1)
+                    s = ALMA_PERIOD / sigma
+                    weights = np.exp(-((np.arange(ALMA_PERIOD) - m)**2) / (2 * s**2))
+                    weights /= weights.sum()
+                    alma_val = float(np.dot(closes, weights))
+                    self.alma_bars.append({"time": chart_time, "value": alma_val})
                 else:
-                    # Initializing: use cumulative if < 20
-                    pv_sum = sum(b["close"] * b["volume"] for b in self.ohlc_bars)
-                    v_sum = sum(b["volume"] for b in self.ohlc_bars)
-                    vwma_val = float(pv_sum / v_sum) if v_sum > 0 else bar["close"]
-                    self.vwma_bars.append({"time": chart_time, "value": vwma_val})
+                    # Initializing: use simple mean if < 200
+                    closes = [b["close"] for b in self.ohlc_bars]
+                    alma_val = sum(closes) / len(closes)
+                    self.alma_bars.append({"time": chart_time, "value": alma_val})
 
-                if len(self.ohlc_bars) > 500:
+                if len(self.ohlc_bars) > 1000: # Increased limit for ALMA 200 support
                     self.ohlc_bars.pop(0)
-                    if self.vwma_bars: self.vwma_bars.pop(0)
+                    if self.alma_bars: self.alma_bars.pop(0)
                 
                 self.current_bar = {"open": None, "high": -float("inf"), "low": float("inf"), "close": None, "ticks": 0, "volume": 0}
                 self.save_data()
@@ -121,7 +142,7 @@ class MarketDataBackend:
             data = {
                 "ltp": float(self.latest_ltp),
                 "ohlc": self.ohlc_bars,
-                "vwma": self.vwma_bars,
+                "alma": self.alma_bars,
                 "version": "4.0",
                 "last_update": time.time(),
                 "token_id": str(token_id),
@@ -171,7 +192,7 @@ class MarketDataBackend:
             while True:
                 if os.path.exists(STOP_FILE):
                     logger.info("### [v2.0] Stop signal detected. Shutting down sws... ###")
-                    self.sws.close()
+                    self.sws.close_connection()
                     break
                 # Refresh data file every 1 second to keep 'running' state in frontend
                 self.save_data()
