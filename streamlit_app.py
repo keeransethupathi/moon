@@ -8,6 +8,7 @@ import requests
 import pyotp
 import sys
 import threading
+import subprocess
 import traceback
 import logging
 import re
@@ -19,6 +20,8 @@ from order import place_flattrade_order
 # ================= STREAMLIT CONFIG =================
 st.set_page_config(layout="wide", page_title="AngelOne Intelligence Hub")
 
+STOP_FILE = "stop_indices.txt"
+
 def safe_get_secret(key, default=None):
     """Safely get a secret from streamlit secrets or environment variables."""
     try:
@@ -29,40 +32,75 @@ def safe_get_secret(key, default=None):
     return os.environ.get(key, default)
 
 def fetch_live_indices():
-    indices = {
-        "NIFTY 50": "NIFTY_50",
-        "BANK NIFTY": "NIFTY_BANK",
-        "SENSEX": "SENSEX",
-        "FIN NIFTY": "NIFTY_FIN_SERVICE"
-    }
-    results = {}
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    for label, symbol in indices.items():
-        url = f"https://www.google.com/finance/quote/{symbol}:INDEXNSE"
-        if "SENSEX" in symbol:
-            url = f"https://www.google.com/finance/quote/SENSEX:INDEXBOM"
-        
+    file_path = "flattrade_indices.json"
+    if os.path.exists(file_path):
         try:
-            response = requests.get(url, headers=headers, timeout=5)
-            if response.status_code == 200:
-                match = re.search(r'data-last-price="([\d,.]+)"', response.text)
-                if match:
-                    results[label] = match.group(1).replace(",", "")
-                    continue
-                match = re.search(r'class="YMlS1d"[^>]*>([\d,.]+)<', response.text)
-                if match:
-                    results[label] = match.group(1).replace(",", "")
-                    continue
-                match = re.search(r'\]\],\"([\d,.]+)\",\"', response.text)
-                if match:
-                    results[label] = match.group(1).replace(",", "")
-                    continue
+            with open(file_path, "r") as f:
+                data = json.load(f)
+                if time.time() - data.get("last_update", 0) < 60:
+                    return data.get("prices", {})
         except:
             pass
-        results[label] = "N/A"
-    return results
+    return {"NIFTY 50": {"lp": "N/A", "pc": "0.00"}, "SENSEX": {"lp": "N/A", "pc": "0.00"}}
+
+def launch_indices_backend(force=False):
+    if not force and os.path.exists(STOP_FILE):
+        return # Respect manual stop
+
+    file_path = "flattrade_indices.json"
+    last_update = 0
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "r") as f:
+                last_update = json.load(f).get("last_update", 0)
+        except:
+            pass
+    
+    if force or (time.time() - last_update > 60):
+        try:
+            # Check if flattrade_auth exists before launching
+            if os.path.exists("flattrade_auth.json"):
+                subprocess.Popen([sys.executable, "flattrade_indices.py"], 
+                                creationflags=subprocess.CREATE_NEW_CONSOLE)
+                return True
+        except Exception as e:
+            print(f"Launch error: {e}")
+    return False
+
+@st.fragment(run_every="1s")
+def indices_banner_fragment():
+    try:
+        live_indices = fetch_live_indices()
+        
+        # Live control toggle
+        is_stopped = os.path.exists(STOP_FILE)
+        btn_label = "▶️ Start Live Indices" if is_stopped else "🛑 Stop Live Indices"
+        btn_help = "Start the indices background service" if is_stopped else "Stop the indices background service"
+        
+        if st.button(btn_label, help=btn_help, use_container_width=True):
+            if is_stopped:
+                # Force start: Clear stop flag and stale PID
+                if os.path.exists(STOP_FILE):
+                    os.remove(STOP_FILE)
+                if os.path.exists("flattrade_indices.pid"):
+                    try:
+                        os.remove("flattrade_indices.pid")
+                    except:
+                        pass
+                launch_indices_backend(force=True)
+            else:
+                with open(STOP_FILE, "w") as f:
+                    f.write("stop")
+            st.rerun()
+
+        cols = st.columns(2)
+        for i, (label, data) in enumerate(live_indices.items()):
+            with cols[i]:
+                price = data.get("lp", "N/A")
+                change = f"{data.get('pc', '0.00')}%"
+                st.metric(label, price, delta=change)
+    except Exception as e:
+        st.error(f"Error loading live indices: {e}")
 
 @st.fragment(run_every="1s")
 def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
@@ -78,8 +116,12 @@ def display_dashboard_fragment(token_id, exchange_type, exchange_mapping):
             last_update = data.get("last_update", 0)
             if time.time() - last_update < 10:
                 st.session_state.backend_running = True
-                st.session_state.ohlc_data = data.get("ohlc", [])
-                st.session_state.alma_data = data.get("alma", [])
+                
+                # Apply IST offset (+5:30) for chart display
+                IST_OFFSET = 19800 # 5.5 hours in seconds
+                st.session_state.ohlc_data = [{**b, "time": b["time"] + IST_OFFSET} for b in data.get("ohlc", [])]
+                st.session_state.alma_data = [{**b, "time": b["time"] + IST_OFFSET} for b in data.get("alma", [])]
+                
                 st.session_state.current_ltp = float(data.get("ltp", 0.0))
                 st.session_state.last_data_ts = last_update
                 data_found = True
@@ -664,14 +706,7 @@ elif menu == "📦 Scrip Master":
     
     # Live Indices Banner
     st.subheader("🌕 Live Market Indices")
-    try:
-        live_indices = fetch_live_indices()
-        cols = st.columns(4)
-        for i, (label, price) in enumerate(live_indices.items()):
-            with cols[i]:
-                st.metric(label, price)
-    except Exception as e:
-        st.error(f"Error loading live indices: {e}")
+    indices_banner_fragment()
     st.divider()
     
     SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
@@ -778,7 +813,7 @@ elif menu == "📦 Scrip Master":
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            instr_options = ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"]
+            instr_options = ["NIFTY", "SENSEX"]
             new_instr = st.selectbox("Select Index", options=instr_options)
             if new_instr != st.session_state.selected_instrument:
                 st.session_state.selected_instrument = new_instr
@@ -794,7 +829,7 @@ elif menu == "📦 Scrip Master":
             filtered_df = filtered_df[filtered_df['exch_seg'] == 'NFO']
             
         exp_list = sorted(
-            list(set(filtered_df['expiry'].dropna().str.strip().str.upper())),
+            [e for e in list(set(filtered_df['expiry'].dropna().str.strip().str.upper())) if e],
             key=lambda x: datetime.strptime(x, '%d%b%Y')
         )
         

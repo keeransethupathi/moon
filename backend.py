@@ -67,7 +67,11 @@ class MarketDataBackend:
                 qty = message.get("last_traded_quantity") or 1
                 ts_raw = message.get("exchange_timestamp")
                 if ts_raw:
-                    ts = datetime.fromtimestamp(ts_raw / 1000)
+                    # Detect if timestamp is in milliseconds or seconds
+                    if ts_raw > 10**12: # milliseconds (typical for 2024+ epochs)
+                        ts = datetime.fromtimestamp(ts_raw / 1000)
+                    else: # seconds
+                        ts = datetime.fromtimestamp(ts_raw)
                 else:
                     ts = datetime.now()
                 

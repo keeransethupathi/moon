@@ -17,3 +17,6 @@ page_source.html
 firebase_key.json
 firebase_export.json
 .gemini/
+flattrade_indices.json
+flattrade_indices.pid
+stop_indices.txt
